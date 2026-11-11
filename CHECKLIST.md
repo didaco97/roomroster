@@ -37,7 +37,7 @@
 - [ ] Supply database URL and run schema migration.
 - [ ] Supply Gmail app password and verify actual delivery.
 - [ ] Supply Gemini API key and verify live semantic ranking.
-- [ ] Deploy to Netlify and verify scheduled email delivery on the deployed site.
+- [ ] Deploy to the chosen host (Workers preferred; Netlify supported) and verify scheduled email delivery.
 
 ## Live release update — November 12
 - [x] Production builds cannot use preview data, even if an old demo environment flag is set.
@@ -56,3 +56,11 @@
 - [ ] Verify real email-code login, delivery, and scheduled tasks on the deployed host.
 
 Use [PRODUCTION.md](PRODUCTION.md) as the current deployment guide. Workers is now the requested target; the Netlify configuration remains available. No live credential or password was committed.
+
+## User handoff — November 12
+- [x] Neon organization setup completed as RoomRoster.
+- [x] Private, Git-ignored `.env` prepared on the development computer with the existing session secret.
+- [ ] Finish Neon project creation; onboarding was left at region selection. No database project was created in this session.
+- [ ] Fill `DATABASE_URL` and `SMTP_PASS`; both remain blank in the prepared `.env`.
+- [x] README now contains the pending checklist and complete database, Gmail, admin-code, and Workers setup instructions.
+- Account setup and live deployment are handed back to the user at their request.

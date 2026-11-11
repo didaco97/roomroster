@@ -1,5 +1,7 @@
 # RoomRoster live deployment
 
+For the step-by-step user handoff, pending tasks, Neon project creation, and Gmail app-password instructions, start with [README.md](README.md). Account provisioning was stopped at the user's request: the Neon organization exists, but project creation, database connection, Gmail sending, and live deployment remain pending.
+
 ## Current release
 
 - Production builds never load preview data or the preview banner, regardless of `VITE_DEMO_MODE`. Local Vite development can still use isolated sample fixtures.
