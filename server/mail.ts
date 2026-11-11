@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { gmailTransportOptions, safeMailFailure } from "./smtp";
 import { randomUUID } from "node:crypto";
 import { db } from "./db";
 import { createToken, escapeHtml as h } from "./security";
@@ -27,14 +28,7 @@ export async function flush(limit = 12, recipient: string | null = null) {
   if (!process.env.SMTP_USER || !process.env.SMTP_PASS)
     return { sent: 0, configured: false };
   const sql = db();
-  const transport = nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    disableFileAccess: true,
-    disableUrlAccess: true,
-    connectionTimeout: 10000,
-    socketTimeout: 15000,
-  });
+  const transport = nodemailer.createTransport(gmailTransportOptions());
   let sent = 0;
   for (let i = 0; i < limit; i++) {
     const day = indiaDay();
@@ -155,9 +149,10 @@ export async function flush(limit = 12, recipient: string | null = null) {
         await sql`INSERT INTO digest_cursor(profile,seen) VALUES(${m.data.profile},${m.data.until}) ON CONFLICT(profile) DO UPDATE SET seen=EXCLUDED.seen`;
       }
       sent++;
-    } catch {
+    } catch (error) {
+      console.error("RoomRoster SMTP failure", safeMailFailure(error));
       await sql`UPDATE mail_queue SET state='failed' WHERE id=${m.id}`; /* Keep reservation: SMTP outcome may be ambiguous; never retry automatically. */
     }
   }
   return { sent, configured: true };
-}
+        }
