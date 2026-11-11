@@ -1,4 +1,3 @@
-import { demoProfiles } from "./demo";
 import {
   eventDefault,
   rankProfiles,
@@ -6,7 +5,9 @@ import {
   type EventInfo,
   type Connection,
 } from "./domain";
-export const DEMO = import.meta.env.VITE_DEMO_MODE !== "false";
+// Sample profiles are available only in the local development server.
+export const DEMO =
+  import.meta.env.DEV && import.meta.env.VITE_DEMO_MODE !== "false";
 type Store = {
   events: EventInfo[];
   profiles: Profile[];
@@ -20,7 +21,7 @@ function read(): Store {
   } catch {}
   return {
     events: [eventDefault],
-    profiles: demoProfiles,
+    profiles: [],
     connections: [],
     self: {},
   };
@@ -32,18 +33,25 @@ export async function api<T = any>(
   action: string,
   body: Record<string, any> = {},
 ): Promise<T> {
-  if (!DEMO) {
+  if (!DEMO || action.startsWith("admin-") || action === "create-event") {
     const r = await fetch(`/api/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await r.json();
+    const data = await r.json().catch(() => {
+      throw Error(
+        "The service is unavailable. Please check that the server and database are connected.",
+      );
+    });
     if (!r.ok)
       throw new Error(data.error || "Something went wrong. Please try again.");
     return data;
   }
   const s = read();
+  if (!localStorage.getItem("roomroster-v1")) {
+    if (import.meta.env.DEV) s.profiles = (await import("./demo")).demoProfiles;
+  }
   let result: any;
   const event = body.event || eventDefault.slug;
   const me = s.profiles.find((p) => p.id === s.self[event]);
@@ -56,7 +64,7 @@ export async function api<T = any>(
         connections: s.connections.filter(
           (c) => c.event === event && (c.from === me?.id || c.to === me?.id),
         ),
-        admin: true,
+        admin: false,
       };
       break;
     case "events":

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { db } from "./db";
 import { createToken, escapeHtml as h } from "./security";
 import { indiaDay } from "../src/domain";
+import { issueAdminCode, adminEmail } from "./admin";
 export async function queue(
   email: string,
   event: string,
@@ -22,7 +23,7 @@ export function emailTemplate(
 ) {
   return `<html><body style="margin:0;background:#f8f5ee;color:#2a2420;font-family:Georgia,serif"><div style="max-width:540px;margin:auto;padding:36px 24px"><p style="font-size:25px;font-weight:bold">roomroster ✳</p><div style="border:1px solid #8e8270;padding:28px;background:#fffaf0"><h1 style="font-size:27px">${h(title)}</h1>${body}<p style="margin:28px 0"><a href="${h(url)}" style="background:#2a2420;color:#fffaf0;padding:14px 20px;text-decoration:none;display:inline-block">${h(label)} →</a></p></div><p style="font-size:12px">Participant-created directory · Good people. Same room.</p>${unsubscribe ? `<p><a href="${h(unsubscribe)}">Turn off match updates for this event</a></p>` : ""}</div></body></html>`;
 }
-export async function flush(limit = 12) {
+export async function flush(limit = 12, recipient: string | null = null) {
   if (!process.env.SMTP_USER || !process.env.SMTP_PASS)
     return { sent: 0, configured: false };
   const sql = db();
@@ -38,7 +39,7 @@ export async function flush(limit = 12) {
   for (let i = 0; i < limit; i++) {
     const day = indiaDay();
     const claimed =
-      await sql`UPDATE mail_queue SET state='sending' WHERE id=(SELECT q.id FROM mail_queue q WHERE q.state='pending' AND NOT EXISTS(SELECT 1 FROM daily_mail d WHERE d.email=q.email AND d.day=${day} AND (d.total>=3 OR (q.kind='match' AND d.recommendations>=2))) ORDER BY CASE WHEN q.kind='match' THEN 1 ELSE 0 END,q.created FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`;
+      await sql`UPDATE mail_queue SET state='sending' WHERE id=(SELECT q.id FROM mail_queue q WHERE q.state='pending' AND (${recipient}::text IS NULL OR q.email=${recipient}) AND NOT EXISTS(SELECT 1 FROM daily_mail d WHERE d.email=q.email AND d.day=${day} AND (d.total>=3 OR (q.kind='match' AND d.recommendations>=2))) ORDER BY CASE WHEN q.kind='admin-code' THEN 0 WHEN q.kind='match' THEN 2 ELSE 1 END,q.created FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`;
     if (!claimed.length) break;
     const m = claimed[0];
     const ev = (await sql`SELECT data FROM events WHERE slug=${m.event}`)[0]
@@ -86,18 +87,30 @@ export async function flush(limit = 12) {
       const origin = process.env.APP_URL;
       if (!origin) throw Error("APP_URL missing");
       const base = `${origin}/e/${m.event}`;
-      const token = await createToken(
-        m.email,
-        m.event,
-        m.kind === "create" ? "create" : "access",
-        m.kind === "create" ? m.data : {},
-      );
-      const url = `${origin}/api/link?token=${token}`;
+      const token =
+        m.kind === "admin-code"
+          ? ""
+          : await createToken(
+              m.email,
+              m.event,
+              m.kind === "create" ? "create" : "access",
+              m.kind === "create" ? m.data : {},
+            );
+      const url =
+        m.kind === "admin-code"
+          ? `${origin}/admin`
+          : `${origin}/api/link?token=${token}`;
       let title = "",
         body = "",
         label = "Open your event";
       let unsubscribe: string | undefined;
-      if (m.kind === "welcome") {
+      if (m.kind === "admin-code") {
+        if (m.email !== adminEmail()) throw Error("Invalid admin recipient");
+        const code = await issueAdminCode();
+        title = "Your RoomRoster sign-in code";
+        body = `<p>Enter this code in RoomRoster to open your admin dashboard:</p><p style="font-size:32px;letter-spacing:8px;font-weight:bold">${code}</p><p>This code expires in 10 minutes and works once. If you did not request it, you can ignore this email.</p>`;
+        label = "Open admin sign-in";
+      } else if (m.kind === "welcome") {
         title = `You’re in — ${ev.name}`;
         body = `<p>Hi ${h(m.data.name)}, your place in the directory is ready.</p><p>Confirm your email to start connecting and securely manage your profile.</p>`;
         label = "Confirm my email & explore";
@@ -116,7 +129,7 @@ export async function flush(limit = 12) {
         label = "Review connection request";
       } else {
         title = `People you may want to meet at ${ev.name}`;
-        body = `<p>Since your last update, <strong>${Number(m.data.count)} new ${Number(m.data.count) === 1 ? 'person' : 'people'}</strong> joined this event’s directory.</p><p>These attendees may be able to help with what you’re looking for:</p><ul>${m.data.matches.map((p: any) => `<li><a href="${h(base + "/people/" + p.id)}">${h(p.name)}</a> — ${h(p.reason)}</li>`).join("")}</ul>`;
+        body = `<p>Since your last update, <strong>${Number(m.data.count)} new ${Number(m.data.count) === 1 ? "person" : "people"}</strong> joined this event’s directory.</p><p>These attendees may be able to help with what you’re looking for:</p><ul>${m.data.matches.map((p: any) => `<li><a href="${h(base + "/people/" + p.id)}">${h(p.name)}</a> — ${h(p.reason)}</li>`).join("")}</ul>`;
         label = "Meet your suggested people";
         const opt = await createToken(
           m.email,
@@ -129,6 +142,7 @@ export async function flush(limit = 12) {
       }
       await transport.sendMail({
         from: { name: "RoomRoster", address: process.env.SMTP_USER },
+        replyTo: process.env.ORGANIZER_EMAIL || "roomroster07@gmail.com",
         to: m.email,
         subject: title.replace(/[\r\n]/g, " "),
         html: emailTemplate(title, body, url, label, unsubscribe),

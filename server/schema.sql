@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS connections (id uuid PRIMARY KEY, event text NOT NULL
 CREATE UNIQUE INDEX IF NOT EXISTS connection_pair ON connections(event,least(sender,recipient),greatest(sender,recipient));
 CREATE TABLE IF NOT EXISTS tokens (hash text PRIMARY KEY, email text NOT NULL, event text NOT NULL, kind text NOT NULL, data jsonb NOT NULL DEFAULT '{}', expires timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (hash text PRIMARY KEY, email text NOT NULL, expires timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS admin_sessions (hash text PRIMARY KEY, version text NOT NULL, expires timestamptz NOT NULL);
+CREATE TABLE IF NOT EXISTS admin_codes (email text PRIMARY KEY, hash text NOT NULL, expires timestamptz NOT NULL, attempts integer NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS limits (key text PRIMARY KEY, count integer NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS daily_mail (email text NOT NULL, day text NOT NULL, total integer NOT NULL DEFAULT 0, recommendations integer NOT NULL DEFAULT 0, PRIMARY KEY(email,day));
 CREATE TABLE IF NOT EXISTS mail_queue (id uuid PRIMARY KEY, email text NOT NULL, event text NOT NULL REFERENCES events(slug), kind text NOT NULL, data jsonb NOT NULL, dedupe text UNIQUE NOT NULL, state text NOT NULL DEFAULT 'pending', created timestamptz NOT NULL DEFAULT now());

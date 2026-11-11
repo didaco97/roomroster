@@ -48,6 +48,7 @@ import {
   DialogDescription,
 } from "./components/ui/dialog";
 import { api, DEMO } from "./api";
+import Admin from "./Admin";
 import {
   blankProfile,
   eventDefault,
@@ -268,7 +269,11 @@ export default function App() {
       )}
       <Routes>
         <Route path="/" element={<Landing />} />
-        <Route path="/create" element={<CreateEvent />} />
+        <Route path="/create" element={<ContactEvent />} />
+        <Route
+          path="/admin/*"
+          element={<Admin createForm={<CreateEvent />} />}
+        />
         <Route path="/e/:slug/*" element={<EventApp />} />
         <Route
           path="*"
@@ -286,10 +291,15 @@ export default function App() {
 }
 function Landing() {
   const [events, set] = useState<EventInfo[]>([]);
+  const [loadError, setLoadError] = useState("");
   useEffect(() => {
     api<EventInfo[]>("events")
       .then(set)
-      .catch(() => {});
+      .catch(() =>
+        setLoadError(
+          "The directory is temporarily unavailable. Please try again shortly, or email roomroster07@gmail.com.",
+        ),
+      );
   }, []);
   return (
     <div className="shell">
@@ -339,6 +349,11 @@ function Landing() {
           <span className="hand-note">a good place to begin ↘</span>
         </div>
         <div className="event-grid">
+          {loadError && (
+            <p role="status" className="notice">
+              {loadError}
+            </p>
+          )}
           {events.map((e) => (
             <Paper key={e.slug} className="event-card" stock="card">
               <span className="eyebrow">PARTICIPANT DIRECTORY</span>
@@ -362,7 +377,7 @@ function Landing() {
             [
               "01",
               "Make it yours",
-              "Create an event and share one link with your people.",
+              "Get in touch and we’ll help set up your event’s own directory.",
             ],
             [
               "02",
@@ -387,6 +402,48 @@ function Landing() {
     </div>
   );
 }
+function ContactEvent() {
+  return (
+    <div className="shell">
+      <header>
+        <Logo />
+        <Link to="/">Back to rooms</Link>
+      </header>
+      <main id="main" className="form-page">
+        <span className="eyebrow">MAKE ROOM FOR YOUR PEOPLE</span>
+        <h1>
+          Your event.
+          <br />A room of its own.
+        </h1>
+        <p>
+          Hosting a gathering? Tell us a little about your event and we’ll help
+          you set up a participant directory.
+        </p>
+        <Paper stock="card" className="form-paper">
+          <h2>Let’s put it together.</h2>
+          <p className="admin-mail-help">
+            Email us your event name, dates, and approximate number of
+            participants. We’ll get back to you with the next steps.
+          </p>
+          <Button asChild>
+            <a href="mailto:roomroster07@gmail.com?subject=Create%20an%20event%20on%20RoomRoster">
+              Email RoomRoster
+            </a>
+          </Button>
+          <p className="admin-mail-help">
+            <a className="text-link" href="mailto:roomroster07@gmail.com">
+              roomroster07@gmail.com
+            </a>
+          </p>
+          <Link className="text-link" to="/admin">
+            Organizer? Sign in here →
+          </Link>
+        </Paper>
+      </main>
+      <Footer />
+    </div>
+  );
+}
 function CreateEvent() {
   const nav = useNavigate();
   const [details, set] = useState({
@@ -398,7 +455,6 @@ function CreateEvent() {
     start: "",
     end: "",
   });
-  const [email, setEmail] = useState("");
   const [message, msg] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(e: FormEvent) {
@@ -409,7 +465,7 @@ function CreateEvent() {
     }
     setBusy(true);
     try {
-      const r = await api("create-event", { details, email });
+      const r = await api("create-event", { details });
       if (r.slug) nav(`/e/${r.slug}`);
       else msg(r.message);
     } catch (e) {
@@ -487,17 +543,9 @@ function CreateEvent() {
                 />
               </Field>
             </div>
-            <Field
-              label="Your organizer email"
-              hint="We’ll send a secure link to confirm ownership and create your event."
-            >
-              <Input
-                required
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </Field>
+            <p className="micro">
+              Created under your RoomRoster administrator account.
+            </p>
             {message && (
               <p role="status" className="notice">
                 {message}

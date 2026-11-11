@@ -85,23 +85,15 @@ test("onboarding, recommendations, search, request and profile editing", async (
   await page.getByRole("button", { name: "Find people", exact: true }).click();
   await expect(page.getByRole("button", { name: /Rohan Mehta/ })).toBeVisible();
 });
-test("event creation isolates directories", async ({ page }) => {
+test("public event creation directs people to email", async ({ page }) => {
   await page.goto("/create");
-  await page.getByLabel("Event name").fill("Test growers");
-  await page.getByLabel("A short introduction").fill("A gathering");
-  await page.getByLabel("About your event").fill("A local farmer gathering");
-  await page.getByLabel("Location", { exact: true }).fill("Pune");
-  await page.getByLabel("Starts").fill("2026-12-01");
-  await page.getByLabel("Ends").fill("2026-12-02");
-  await page.getByLabel("Your organizer email").fill("host@example.com");
-  await page.getByRole("button", { name: "Create event directory" }).click();
   await expect(
-    page.getByRole("heading", { name: "Test growers" }),
-  ).toBeVisible();
-  await page.getByRole("link", { name: /People directory/ }).click();
-  await expect(page.getByText("A little more room to grow.")).toBeVisible();
-  await expect(page.getByRole("button", { name: /Rohan Mehta/ })).toHaveCount(
-    0,
+    page.getByRole("link", { name: "Email RoomRoster", exact: true }),
+  ).toHaveAttribute("href", /mailto:roomroster07@gmail.com/);
+  await expect(page.getByLabel("Event name")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Organizer/ })).toHaveAttribute(
+    "href",
+    "/admin",
   );
 });
 test("core screens have no serious accessibility violations", async ({
@@ -125,6 +117,7 @@ test("recipient accepts a request and modal supports keyboard dismissal", async 
   page,
 }) => {
   await page.goto(base);
+  await expect(page.getByRole("heading", { name: /Big ideas/ })).toBeVisible();
   await page.evaluate(() => {
     const s = JSON.parse(localStorage.getItem("roomroster-v1")!);
     s.self["manage-agri-eureka-2026"] = "sample-1";

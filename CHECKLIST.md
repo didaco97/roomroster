@@ -38,3 +38,21 @@
 - [ ] Supply Gmail app password and verify actual delivery.
 - [ ] Supply Gemini API key and verify live semantic ranking.
 - [ ] Deploy to Netlify and verify scheduled email delivery on the deployed site.
+
+## Live release update — November 12
+- [x] Production builds cannot use preview data, even if an old demo environment flag is set.
+- [x] Sample fixtures are excluded from production JavaScript, not just hidden.
+- [x] Public event creation replaced with email contact; API requires platform admin authorization.
+- [x] Admin dashboard: participants across events, search/filter, removal, event creation, delivery status.
+- [x] Admin sign-in uses six-digit email codes, not passwords: 10-minute expiry, one use, five attempts, resend throttle.
+- [x] Admin codes and sessions are hashed; participant email links cannot grant admin access.
+- [x] Mail queue drain every five minutes, event match digests twice daily, replies routed to the organizer inbox.
+- [x] Cloudflare Workers entry point, static asset routing, scheduled jobs, secret configuration, and deployment guide.
+- [x] Workers upload dry run and local static/API runtime smoke check.
+- [x] 20 domain/server tests and 6 browser suites passed, including admin code replay/expiry/attempt caps and mobile admin accessibility.
+- [ ] Renew expired Cloudflare authentication (`npx wrangler login`).
+- [ ] Configure live database, SESSION_SECRET, APP_URL and Gmail app password on the chosen host.
+- [ ] Run the updated schema migration (adds admin session/code tables).
+- [ ] Verify real email-code login, delivery, and scheduled tasks on the deployed host.
+
+Use [PRODUCTION.md](PRODUCTION.md) as the current deployment guide. Workers is now the requested target; the Netlify configuration remains available. No live credential or password was committed.

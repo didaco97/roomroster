@@ -1,8 +1,9 @@
 [build]
-  command = "npm run build"
+  command = "npm run build && node --import tsx server/deploy-prepare.ts"
   publish = "dist"
 [build.environment]
   NODE_VERSION = "22"
+  VITE_DEMO_MODE = "false"
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"

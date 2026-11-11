@@ -1,5 +1,7 @@
 # RoomRoster
 
+**Live release setup:** read [PRODUCTION.md](PRODUCTION.md) for Cloudflare Workers or Netlify, admin email-code sign-in, and required service configuration. Production builds cannot use the preview roster.
+
 A mobile-first, event-scoped people directory for MANAGE Agri-Eureka 2026. Built with React, TypeScript, the actual Looseleaf source components, PostgreSQL, and Netlify Functions.
 
 ## Run the preview
@@ -9,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173/e/manage-agri-eureka-2026`. Preview is the default: fictional attendees, browser-local persistence, and **no outgoing email or AI calls**. Register a profile, search, request connections, edit your profile, or create a separate event. Clear the `roomroster-v1` localStorage key to reset. Preview organizer controls are intentionally visible to everyone.
+Open `http://localhost:5173/e/manage-agri-eureka-2026`. Local development supports preview: fictional attendees, browser-local persistence, and **no outgoing email or AI calls**. Register a profile, search, request connections, edit your profile, or explore event pages. Clear the `roomroster-v1` localStorage key to reset. Admin features always use the real API. Public event creation directs visitors to email us.
 
 ## Implemented
 
@@ -19,7 +21,7 @@ Open `http://localhost:5173/e/manage-agri-eureka-2026`. Preview is the default: 
 - Directory, live local search suggestions, submitted semantic search, sector filters, sort, profile dialogs, and recommendation popup.
 - Passwordless email ownership confirmation. Browsing needs no login; editing/connecting requires the secure email link. No contact info in public API responses.
 - Requests and recipient-only acceptance; contact sharing only after acceptance. Accepted contacts are visible in My connections.
-- Organizer edit/close/remove controls protected by verified email in live mode.
+- Admin-only event creation, participant management, and event edit/close/remove controls protected by one-time email codes.
 - Welcome, connection, ownership-link, and recommendation emails. Global three-mail daily cap per email, with at most two match emails. The pilot day is Asia/Kolkata. Ownership emails count toward the global cap too.
 - Scheduled digests at 11:00 and 17:00 IST. Exact per-event counts, no already-emailed or connected/declined matches, unsubscribe and alert preference controls.
 - Server-only Gemini integration with text-only consented candidate data, caching, request quotas, and skill/keyword fallback. AI never decides contact permissions or counts.
@@ -36,9 +38,9 @@ Open `http://localhost:5173/e/manage-agri-eureka-2026`. Preview is the default: 
    node --env-file=.env --import tsx server/migrate.ts
    ```
 
-6. Set `VITE_DEMO_MODE=false`. Run `npm run dev:full` for the full API locally. This invokes Netlify CLI using npx; it is not a production dependency. Set `APP_URL=http://localhost:8888` for local full-stack testing.
+6. Set `VITE_DEMO_MODE=false` for local full-stack testing. Production always uses the live API. Run `npm run dev:full` for the full API locally. This invokes Netlify CLI using npx; it is not a production dependency. Set `APP_URL=http://localhost:8888` for local full-stack testing.
 7. Deploy the repository to Netlify. Build: `npm run build`; publish: `dist`; functions: `netlify/functions`. Set all environment variables in Netlify, with `APP_URL=https://your-site.netlify.app` and `VITE_DEMO_MODE=false`. Server secrets must **never** have a `VITE_` prefix.
-8. Run the migration against the production database. It creates the event without sample attendees. Then request an organizer link using the event page's “Return to your profile” and `roomroster07@gmail.com`.
+8. Run the migration against the production database. It creates the event without sample attendees. Then open `/admin` and request a six-digit sign-in code for `roomroster07@gmail.com`.
 9. Share `/e/manage-agri-eureka-2026` only after completing the launch checks in `CHECKLIST.md`.
 
 ## Email delivery and scheduling

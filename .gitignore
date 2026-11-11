@@ -8,3 +8,7 @@ dist/
 .tmp*/
 test-results/
 playwright-report/
+.local/
+.wrangler/
+.dev.vars
+.dev.vars.*

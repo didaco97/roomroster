@@ -1,5 +1,9 @@
 @source "../components";
 @source "../App.tsx";
+@source "../Admin.tsx";
+.admin-mail-help { margin: 22px 0; }
+.organizer-row p { font-size: 14px; }
+.organizer-row small { overflow-wrap: anywhere; }
 :root {
   --background: var(--ll-paper);
   --primary: var(--ll-ink);

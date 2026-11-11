@@ -8,6 +8,7 @@ import {
   vi,
 } from "vitest";
 import { readFile } from "node:fs/promises";
+
 import { PGlite } from "@electric-sql/pglite";
 import { eventDefault, blankProfile } from "../src/domain";
 const state = vi.hoisted(() => ({ pg: null as any, sent: [] as any[] }));
@@ -34,6 +35,7 @@ import handler from "../netlify/functions/api";
 import digest from "../server/digest";
 import { createToken, hash } from "../server/security";
 import { flush, queue } from "../server/mail";
+import { issueAdminCode, consumeAdminCode } from "../server/admin";
 const event = eventDefault.slug;
 async function call(action: string, body: object = {}, cookie = "") {
   return handler(
@@ -81,6 +83,8 @@ async function session(email: string) {
   return r.headers.get("set-cookie")!.split(";")[0];
 }
 beforeAll(async () => {
+  process.env.ADMIN_EMAIL = "roomroster07@gmail.com";
+
   process.env.APP_URL = "http://localhost:8888";
   process.env.SESSION_SECRET = "a".repeat(40);
   process.env.SMTP_USER = "roomroster07@gmail.com";
@@ -94,7 +98,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   state.sent = [];
   await state.pg.exec(
-    "TRUNCATE events,profiles,connections,tokens,sessions,limits,daily_mail,mail_queue,match_updates,digest_cursor,search_cache CASCADE",
+    "TRUNCATE events,profiles,connections,tokens,sessions,admin_sessions,admin_codes,limits,daily_mail,mail_queue,match_updates,digest_cursor,search_cache CASCADE",
   );
   await state.pg.query("INSERT INTO events VALUES($1,$2,$3)", [
     event,
@@ -106,6 +110,107 @@ afterAll(async () => {
   await state.pg.close();
 });
 describe("live API against PostgreSQL engine with SMTP mocked", () => {
+  it("delivers an admin code, stores only its hash, and consumes it once", async () => {
+    const sent = await call("admin-request-code", {
+      email: "roomroster07@gmail.com",
+    });
+    expect(sent.status).toBe(200);
+    expect(state.sent[0].subject).toBe("Your RoomRoster sign-in code");
+    const code = state.sent[0].html.match(/font-weight:bold">(\d{6})<\/p>/)[1];
+    const row = (await state.pg.query("SELECT * FROM admin_codes")).rows[0];
+    expect(row.hash).not.toBe(code);
+    expect(row.attempts).toBe(0);
+    const login = await call("admin-login", {
+      email: "roomroster07@gmail.com",
+      code,
+    });
+    expect(login.status).toBe(200);
+    expect(
+      (await call("admin-login", { email: "roomroster07@gmail.com", code }))
+        .status,
+    ).toBe(401);
+    expect(
+      (await call("admin-request-code", { email: "roomroster07@gmail.com" }))
+        .status,
+    ).toBe(429);
+  });
+  it("expires codes and locks a challenge after five incorrect guesses", async () => {
+    let code = await issueAdminCode();
+    await state.pg.exec(
+      "UPDATE admin_codes SET expires=now()-interval '1 minute'",
+    );
+    expect(await consumeAdminCode("roomroster07@gmail.com", code)).toBe(false);
+    code = await issueAdminCode();
+    const wrong = code === "000000" ? "000001" : "000000";
+    for (let i = 0; i < 5; i++)
+      expect(await consumeAdminCode("roomroster07@gmail.com", wrong)).toBe(
+        false,
+      );
+    expect(await consumeAdminCode("roomroster07@gmail.com", code)).toBe(false);
+    code = await issueAdminCode();
+    const results = await Promise.all([
+      consumeAdminCode("roomroster07@gmail.com", code),
+      consumeAdminCode("roomroster07@gmail.com", code),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+  it("requires an emailed admin code and manages events and participants across rooms", async () => {
+    const details = { ...eventDefault, name: "Another event" };
+    expect(
+      (await call("create-event", { details, email: "roomroster07@gmail.com" }))
+        .status,
+    ).toBe(403);
+    const participantCookie = await session("roomroster07@gmail.com");
+    expect((await call("admin-overview", {}, participantCookie)).status).toBe(
+      401,
+    );
+    expect(
+      (await call("create-event", { details }, participantCookie)).status,
+    ).toBe(403);
+    expect(
+      (
+        await call("admin-login", {
+          email: "roomroster07@gmail.com",
+          code: "000000",
+        })
+      ).status,
+    ).toBe(401);
+    const login = await call("admin-login", {
+      email: "roomroster07@gmail.com",
+      code: await issueAdminCode(),
+    });
+    expect(login.status).toBe(200);
+    expect(login.headers.get("set-cookie")).toContain("HttpOnly");
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const p = await register("person@example.com");
+    const created = await (
+      await call("create-event", { details }, cookie)
+    ).json();
+    expect(created.slug).toBeTruthy();
+    const overview = await (await call("admin-overview", {}, cookie)).json();
+    expect(overview.events).toHaveLength(2);
+    expect(overview.participants[0].email).toBe("person@example.com");
+    expect((await call("remove", { id: p.id }, cookie)).status).toBe(200);
+    expect(
+      (await (await call("admin-overview", {}, cookie)).json()).participants,
+    ).toHaveLength(0);
+    await call("admin-logout", {}, cookie);
+    expect((await call("admin-overview", {}, cookie)).status).toBe(401);
+  });
+  it("rejects old admin sessions when the session secret is rotated", async () => {
+    const login = await call("admin-login", {
+      email: "roomroster07@gmail.com",
+      code: await issueAdminCode(),
+    });
+    const cookie = login.headers.get("set-cookie")!.split(";")[0];
+    const original = process.env.SESSION_SECRET;
+    process.env.SESSION_SECRET = "z".repeat(40);
+    try {
+      expect((await call("admin-overview", {}, cookie)).status).toBe(401);
+    } finally {
+      process.env.SESSION_SECRET = original;
+    }
+  });
   it("hides contacts, blocks unauthenticated edits, and unlocks contacts only after recipient acceptance", async () => {
     const a = await register("alice@example.com", "Alice");
     const b = await register("bob@example.com", "Bob", ["Web / app developer"]);
@@ -164,20 +269,39 @@ describe("live API against PostgreSQL engine with SMTP mocked", () => {
     const profile = (await state.pg.query("SELECT id FROM profiles")).rows[0]
       .id;
     for (let i = 0; i < 4; i++) {
-      const candidate = await register(`candidate-${i}@example.com`, `Candidate ${i}`);
+      const candidate = await register(
+        `candidate-${i}@example.com`,
+        `Candidate ${i}`,
+      );
       await queue(
         "alice@example.com",
         event,
         "match",
-        { profile, count: 0, until: new Date().toISOString(), matches: [{id:candidate.id,name:candidate.data.name,reason:'Offers web development.'}] },
+        {
+          profile,
+          count: 0,
+          until: new Date().toISOString(),
+          matches: [
+            {
+              id: candidate.id,
+              name: candidate.data.name,
+              reason: "Offers web development.",
+            },
+          ],
+        },
         "test-" + i,
       );
     }
     // Registration flushes the queue; count recommendation mail already sent too.
-    const already = state.sent.filter(m=>m.to==='alice@example.com'&&m.subject.startsWith('People you may')).length;
+    const already = state.sent.filter(
+      (m) =>
+        m.to === "alice@example.com" && m.subject.startsWith("People you may"),
+    ).length;
     state.sent = [];
     await Promise.all([flush(4), flush(4)]);
-    expect(state.sent.filter(m=>m.to==='alice@example.com')).toHaveLength(2-already);
+    expect(state.sent.filter((m) => m.to === "alice@example.com")).toHaveLength(
+      2 - already,
+    );
     const row = (
       await state.pg.query("SELECT * FROM daily_mail WHERE email=$1", [
         "alice@example.com",
