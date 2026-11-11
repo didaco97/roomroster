@@ -11,7 +11,7 @@ The frontend and API are deployed to Cloudflare Workers as **roomroster-demo**. 
 - `roomroster.me` and `www.roomroster.me` are bound to the Worker. Namecheap registration is unchanged; the nameserver change to Cloudflare was saved. Public DNS/HTTPS cutover still needs verification. All five existing mail MX records and SPF were preserved.
 - Google 2-Step Verification is enabled for `roomroster07@gmail.com`. One live admin-code email reached that same inbox and its code successfully opened the admin dashboard. The first pre-fix attempt failed; the delivery history correctly retains one sent and one failed message.
 - Gmail transport now opens verified TLS by hostname for Workers compatibility. Logs include only allowlisted failure code/stage fields, never SMTP responses, email bodies, addresses, or secrets.
-- **No cron triggers are active.** The production build overrides the repository's default cron list with an empty list. Free-plan SQL/subrequest and CPU capacity for batch mail/digests is not validated. Do not enable schedules without bounded batching and capacity checks.
+- **No cron triggers are active.** The repository configuration and production deployment both use an empty cron list. Free-plan SQL/subrequest and CPU capacity for batch mail/digests is not validated. Do not enable schedules without bounded batching and capacity checks.
 - Local validation: 23 unit/backend tests, six browser suites, production build and Workers packaging passed. Browser attendee flows use local sample data; backend tests use isolated PostgreSQL/PGlite and mocked SMTP. These are not live participant-flow verification.
 - Optional AI is not configured. Keyword matching remains available. No paid plan or API spending was used for this setup.
 
@@ -112,7 +112,7 @@ Complete Cloudflare's browser sign-in/authorization yourself and confirm the int
 
 ### Add server secrets
 
-Use **Cloudflare Dashboard → Workers & Pages → roomroster → Settings → Variables and Secrets**, or run these commands and enter values at the private prompts:
+Use **Cloudflare Dashboard → Workers & Pages → roomroster-demo → Settings → Variables and Secrets**, or run these commands and enter values at the private prompts:
 
 ```sh
 npx wrangler secret put DATABASE_URL
@@ -130,14 +130,14 @@ Choose a Workers plan with suitable CPU/subrequest limits for SQL and scheduled 
 
 ### Automatic GitHub deployment
 
-The connected production service is `roomroster-demo` on branch `main`. Its build generates `wrangler.stage.json` from `wrangler.jsonc`, overrides the service name, keeps `workers_dev=true`, sets `vars.APP_URL=https://roomroster.me`, preserves both custom-domain routes and explicitly uses `triggers.crons=[]`.
+The connected production service is `roomroster-demo` on branch `main`. `wrangler.jsonc` names that existing service, preserves root/www custom domains, sets `APP_URL=https://roomroster.me`, enables its workers.dev endpoint and keeps `triggers.crons=[]`.
 
-- Build: `npm run build`, then generate that staged configuration. Keep the saved dashboard build command until a reviewed equivalent is committed.
-- Deploy command: `npx wrangler deploy --config wrangler.stage.json`
+- Build command: `npm run build`
+- Deploy command: `npx wrangler deploy`
 - Configure runtime secrets in Cloudflare, never in GitHub source files.
 - Run database migrations separately before releases that change the schema.
 
-The repository default `wrangler.jsonc` proposes queued mail every five minutes and matching digests at **11:00 and 17:00 Asia/Kolkata**. Those defaults are NOT active in the staged production deployment. A direct deploy of the default config could create a differently named Worker and enable unvalidated schedules; do not use it against production until the deployment configuration is reconciled. Do not expose the local development server as the production site.
+No cron triggers are proposed by the default configuration. Queued sending every five minutes and digests at 11:00/17:00 Asia/Kolkata remain a future plan, not an active schedule. Do not enable them until bounded batch processing and capacity checks pass. Do not expose the local development server as production.
 
 ## 5. Verify admin login and the complete flow
 
