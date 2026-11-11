@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "roomroster",
+  "name": "roomroster-demo",
   "main": "worker/index.ts",
   "compatibility_date": "2026-11-11",
   "compatibility_flags": ["nodejs_compat"],
@@ -10,9 +10,16 @@
     "not_found_handling": "single-page-application",
     "run_worker_first": ["/api/*"],
   },
-  "triggers": { "crons": ["*/5 * * * *", "30 5,11 * * *"] },
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "roomroster.me", "custom_domain": true },
+    { "pattern": "www.roomroster.me", "custom_domain": true }
+  ],
+  // Keep automatic sending off until bounded capacity and delivery checks pass.
+  "triggers": { "crons": [] },
   "observability": { "enabled": true },
   "vars": {
+    "APP_URL": "https://roomroster.me",
     "SMTP_USER": "roomroster07@gmail.com",
     "ORGANIZER_EMAIL": "roomroster07@gmail.com",
     "ADMIN_EMAIL": "roomroster07@gmail.com",
