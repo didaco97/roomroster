@@ -2,33 +2,27 @@
 
 A mobile-first event directory for **MANAGE Agri-Eureka 2026**, built with React, TypeScript, Looseleaf, PostgreSQL, and server-side email/AI matching. Cloudflare Workers is the intended hosting target; Netlify remains supported.
 
-## Current status — November 12, 2026
+## Current status - November 12, 2026
 
-The application is implemented and pushed. **Live service setup is still pending.** Production builds contain no preview banner or fictional profiles. An unconfigured backend reports an unavailable service instead of using sample data.
+The frontend and API are deployed to Cloudflare Workers as **roomroster-demo**. Production contains no preview banner or fictional profiles. **Setup is not yet launch-ready.**
 
-- The Neon organization **RoomRoster** has been set up. Onboarding was left at the project-region selection screen; **no database project or database connection has been created/configured by this setup session**.
-- A private `.env` was prepared on the original development computer with the existing `SESSION_SECRET`. `DATABASE_URL` and `SMTP_PASS` are still blank. This file is ignored by Git and will not be in a fresh clone.
-- Cloudflare CLI authentication must be renewed. Workers packaging and local runtime checks passed, but this session has not deployed or verified the live Worker.
-- Real Gmail delivery, admin email-code sign-in, database connectivity, and deployed schedules have not yet been verified.
-- Local validation passed: **20 domain/backend tests and six browser suites**, production build, Workers upload dry run, and dependency audit. SMTP was mocked in automated tests.
+- Neon PostgreSQL project **roomroster** is on Free in AWS Singapore. The schema migration succeeded with one default event and zero participants. No Neon Auth or Cloudflare D1 is used.
+- Production `DATABASE_URL`, `SESSION_SECRET`, and normalized Gmail `SMTP_PASS` are encrypted runtime secrets, not source files. `APP_URL` is `https://roomroster.me`.
+- `roomroster.me` and `www.roomroster.me` are bound to the Worker. Namecheap registration is unchanged; the nameserver change to Cloudflare was saved. Public DNS/HTTPS cutover still needs verification. All five existing mail MX records and SPF were preserved.
+- Google 2-Step Verification is enabled for `roomroster07@gmail.com`. One live admin-code email reached that same inbox and its code successfully opened the admin dashboard. The first pre-fix attempt failed; the delivery history correctly retains one sent and one failed message.
+- Gmail transport now opens verified TLS by hostname for Workers compatibility. Logs include only allowlisted failure code/stage fields, never SMTP responses, email bodies, addresses, or secrets.
+- **No cron triggers are active.** The production build overrides the repository's default cron list with an empty list. Free-plan SQL/subrequest and CPU capacity for batch mail/digests is not validated. Do not enable schedules without bounded batching and capacity checks.
+- Local validation: 23 unit/backend tests, six browser suites, production build and Workers packaging passed. Browser attendee flows use local sample data; backend tests use isolated PostgreSQL/PGlite and mocked SMTP. These are not live participant-flow verification.
+- Optional AI is not configured. Keyword matching remains available. No paid plan or API spending was used for this setup.
 
-## Pending launch checklist
+### Remaining launch checks
 
-Complete these in order. Do not share the participant registration link until the live checks pass.
-
-- [ ] Finish creating the Neon project and copy its PostgreSQL connection URL.
-- [ ] Add `DATABASE_URL` to the private `.env` file and run the schema migration.
-- [ ] Enable Google 2-Step Verification for `roomroster07@gmail.com` and generate a Gmail app password.
-- [ ] Set `SMTP_PASS`; retain the generated `SESSION_SECRET` or generate one for a fresh installation.
-- [ ] Sign into Cloudflare with `npx wrangler login` and confirm the intended account.
-- [ ] Deploy the Worker, configure its secrets, and set `APP_URL` to the actual deployed HTTPS URL.
-- [ ] Sign into `/admin` using the six-digit email code received by `roomroster07@gmail.com`.
-- [ ] Create another event and verify participant lists, event filtering, and removal.
-- [ ] Register two test participants, verify their email links, request/accept a connection, and check contact privacy.
-- [ ] Verify welcome emails, connection emails, scheduled match updates, and unsubscribe behavior.
-- [ ] Confirm that only the chosen host runs scheduled jobs against this database.
-- [ ] Optional: add a Gemini API key and verify AI search plus quota fallback.
-- [ ] Share `/e/manage-agri-eureka-2026` with attendees after the checks above.
+- [ ] Verify Cloudflare nameserver propagation, certificates and the database-backed frontend on the exact root/www domain.
+- [ ] Test two consenting participant accounts end-to-end: registration, delivered verification links, request/accept, contact privacy, removal and unsubscribe. This requires approved recipients and messages; do not test on real attendees without consent.
+- [ ] Bound mail/digest work per invocation and validate Workers Free CPU/subrequest limits before enabling cron. Verify only one host runs schedules.
+- [ ] Verify scheduled match updates after capacity and recipient approval. No scheduled email has been sent by this deployment.
+- [ ] Optional: configure an approved AI provider/model only if wanted, then verify quota fallback.
+- [ ] Share the registration link only after the remaining checks pass.
 
 ## 1. Prepare your local configuration
 
@@ -136,14 +130,14 @@ Choose a Workers plan with suitable CPU/subrequest limits for SQL and scheduled 
 
 ### Automatic GitHub deployment
 
-Connect `didaco97/roomroster` to **Workers Builds** using branch `main`:
+The connected production service is `roomroster-demo` on branch `main`. Its build generates `wrangler.stage.json` from `wrangler.jsonc`, overrides the service name, keeps `workers_dev=true`, sets `vars.APP_URL=https://roomroster.me`, preserves both custom-domain routes and explicitly uses `triggers.crons=[]`.
 
-- Build command: `npm run build`
-- Deploy command: `npx wrangler deploy`
+- Build: `npm run build`, then generate that staged configuration. Keep the saved dashboard build command until a reviewed equivalent is committed.
+- Deploy command: `npx wrangler deploy --config wrangler.stage.json`
 - Configure runtime secrets in Cloudflare, never in GitHub source files.
 - Run database migrations separately before releases that change the schema.
 
-Cron Triggers are defined in `wrangler.jsonc`: queued mail every five minutes, and matching digests at **11:00 and 17:00 Asia/Kolkata**. They execute automatically only on a deployed Worker. Do not expose the local development server as the production site.
+The repository default `wrangler.jsonc` proposes queued mail every five minutes and matching digests at **11:00 and 17:00 Asia/Kolkata**. Those defaults are NOT active in the staged production deployment. A direct deploy of the default config could create a differently named Worker and enable unvalidated schedules; do not use it against production until the deployment configuration is reconciled. Do not expose the local development server as the production site.
 
 ## 5. Verify admin login and the complete flow
 
