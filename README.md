@@ -8,7 +8,7 @@ The frontend and API are deployed to Cloudflare Workers as **roomroster-demo**. 
 
 - Neon PostgreSQL project **roomroster** is on Free in AWS Singapore. The schema migration succeeded with one default event and zero participants. No Neon Auth or Cloudflare D1 is used.
 - Production `DATABASE_URL`, `SESSION_SECRET`, and normalized Gmail `SMTP_PASS` are encrypted runtime secrets, not source files. `APP_URL` is `https://roomroster.me`.
-- `roomroster.me` and `www.roomroster.me` are bound to the Worker. Namecheap registration is unchanged; the nameserver change to Cloudflare was saved. Public DNS/HTTPS cutover still needs verification. All five existing mail MX records and SPF were preserved.
+- `roomroster.me` and `www.roomroster.me` are bound to the Worker. Public Cloudflare nameservers, HTTPS certificates, the seeded event and empty live directory were verified on 12 November 2026. Namecheap registration is unchanged. All five existing mail MX records and SPF were preserved. A Cloudflare Free redirect rule sends HTTPS www requests to the root domain with status 308, preserving paths and query strings; `APP_URL` remains `https://roomroster.me`.
 - Google 2-Step Verification is enabled for `roomroster07@gmail.com`. One live admin-code email reached that same inbox and its code successfully opened the admin dashboard. The first pre-fix attempt failed; the delivery history correctly retains one sent and one failed message.
 - Gmail transport now opens verified TLS by hostname for Workers compatibility. Logs include only allowlisted failure code/stage fields, never SMTP responses, email bodies, addresses, or secrets.
 - **No cron triggers are active.** The repository configuration and production deployment both use an empty cron list. Free-plan SQL/subrequest and CPU capacity for batch mail/digests is not validated. Do not enable schedules without bounded batching and capacity checks.
@@ -17,7 +17,7 @@ The frontend and API are deployed to Cloudflare Workers as **roomroster-demo**. 
 
 ### Remaining launch checks
 
-- [ ] Verify Cloudflare nameserver propagation, certificates and the database-backed frontend on the exact root/www domain.
+- [x] Verify Cloudflare nameservers, certificates and the database-backed frontend on the root domain, with www redirected to the same root path/query.
 - [ ] Test two consenting participant accounts end-to-end: registration, delivered verification links, request/accept, contact privacy, removal and unsubscribe. This requires approved recipients and messages; do not test on real attendees without consent.
 - [ ] Bound mail/digest work per invocation and validate Workers Free CPU/subrequest limits before enabling cron. Verify only one host runs schedules.
 - [ ] Verify scheduled match updates after capacity and recipient approval. No scheduled email has been sent by this deployment.
