@@ -802,7 +802,11 @@ function EventApp() {
                 to={base + "/profile"}
                 aria-label="Edit your profile"
               >
-                {initials(me.name)}
+                {me.photo ? (
+                  <img src={me.photo} alt="Your profile photo" />
+                ) : (
+                  initials(me.name)
+                )}
               </Link>
             </>
           ) : (
