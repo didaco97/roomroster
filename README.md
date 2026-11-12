@@ -4,23 +4,27 @@ A mobile-first event directory for **MANAGE Agri-Eureka 2026**, built with React
 
 ## Current status - November 12, 2026
 
-The frontend and API are deployed to Cloudflare Workers as **roomroster-demo**. Production contains no preview banner or fictional profiles. **Setup is not yet launch-ready.**
+The frontend and API are deployed to Cloudflare Workers as **roomroster-demo**. Production contains no preview banner or fictional profiles. **This patch is locally verified; deployed participant login and scheduled delivery still need a live smoke check.**
 
 - Neon PostgreSQL project **roomroster** is on Free in AWS Singapore. The schema migration succeeded with one default event and zero participants. No Neon Auth or Cloudflare D1 is used.
 - Production `DATABASE_URL`, `SESSION_SECRET`, and normalized Gmail `SMTP_PASS` are encrypted runtime secrets, not source files. `APP_URL` is `https://roomroster.me`.
 - `roomroster.me` and `www.roomroster.me` are bound to the Worker. Public Cloudflare nameservers, HTTPS certificates, the seeded event and empty live directory were verified on 12 November 2026. Namecheap registration is unchanged. All five existing mail MX records and SPF were preserved. A Cloudflare Free redirect rule sends HTTPS www requests to the root domain with status 308, preserving paths and query strings; `APP_URL` remains `https://roomroster.me`.
 - Google 2-Step Verification is enabled for `roomroster07@gmail.com`. One live admin-code email reached that same inbox and its code successfully opened the admin dashboard. The first pre-fix attempt failed; the delivery history correctly retains one sent and one failed message.
 - Gmail transport now opens verified TLS by hostname for Workers compatibility. Logs include only allowlisted failure code/stage fields, never SMTP responses, email bodies, addresses, or secrets.
-- **No cron triggers are active.** The repository configuration and production deployment both use an empty cron list. Free-plan SQL/subrequest and CPU capacity for batch mail/digests is not validated. Do not enable schedules without bounded batching and capacity checks.
-- Local validation: 23 unit/backend tests, six browser suites, production build and Workers packaging passed. Browser attendee flows use local sample data; backend tests use isolated PostgreSQL/PGlite and mocked SMTP. These are not live participant-flow verification.
+- This release adds participant email-code sign-in, a 30-day HttpOnly session, persistent profile editing, self-request protection, clearer mobile/upload/loading controls, and scheduled digests.
+- Repository schedules now enqueue updates at **1:00 PM and 9:30 PM Asia/Kolkata**. A minute worker prepares at most two digests and sends at most two queued emails per invocation. With 50 recipients, allow roughly 25 minutes to drain a slot, plus provider delays. This is scheduled dispatch, not a promise that every inbox receives mail at the exact minute.
+- Automatic mail is limited to three messages per address per India calendar day, including welcome and at most two digests across events. Connection requests appear immediately in the portal and are summarized in those digests. Explicitly requested login codes use separate abuse limits, so digests cannot lock users out.
+- The existing runtime database secret can apply this release's two additive tables on first use (`server/upgrade.ts`); no participant data is reset. Running the full migration remains recommended. A database role without CREATE permission must have the migration applied by its owner before deploying.
+- Validation: **32 backend/unit tests, seven browser suites, production build, Workers upload dry run and dependency audit (zero known vulnerabilities) passed.** Local regression coverage includes PostgreSQL/PGlite with mocked SMTP, attendee code/session and privacy tests, a 50-recipient batch test, demo and production-API browser flows, mobile layouts and accessibility. These do not prove real inbox delivery or Cloudflare CPU capacity.
 - Optional AI is not configured. Keyword matching remains available. No paid plan or API spending was used for this setup.
 
 ### Remaining launch checks
 
 - [x] Verify Cloudflare nameservers, certificates and the database-backed frontend on the root domain, with www redirected to the same root path/query.
-- [ ] Test two consenting participant accounts end-to-end: registration, delivered verification links, request/accept, contact privacy, removal and unsubscribe. This requires approved recipients and messages; do not test on real attendees without consent.
-- [ ] Bound mail/digest work per invocation and validate Workers Free CPU/subrequest limits before enabling cron. Verify only one host runs schedules.
-- [ ] Verify scheduled match updates after capacity and recipient approval. No scheduled email has been sent by this deployment.
+- [ ] After deployment, test two consenting accounts: welcome code, sign-in, reload/back/edit, request/accept, contact privacy, removal and unsubscribe.
+- [x] Bound mail/digest work and test 50 recipients; count SQL operations with headroom for AI and SMTP.
+- [ ] Confirm the latest commit deployed and inspect Worker CPU/error metrics during a real scheduled batch. Run schedules on one host only.
+- [ ] Verify a real 1 PM and 9:30 PM update, exact event counts, request names, fresh matches and unsubscribe. This patch did not send test mail to attendees.
 - [ ] Optional: configure an approved AI provider/model only if wanted, then verify quota fallback.
 - [ ] Share the registration link only after the remaining checks pass.
 
@@ -93,7 +97,7 @@ Neon reference: [Find your database connection string](https://github.com/neonda
 
 If App passwords is unavailable, check [Google's eligibility and troubleshooting instructions](https://support.google.com/accounts/answer/185833). Some account configurations restrict app passwords. The current application uses Gmail SMTP; switching to another provider would require changing the server transport.
 
-This setup sends welcome emails, connection notifications, recommendations, participant access links, and admin codes. Replies go to your organizer inbox. **It does not forward incoming Gmail messages to another inbox.**
+This setup sends a welcome email containing the first sign-in code, two opted-in daily event digests containing matches and connection notifications, and separately requested participant/admin sign-in codes. Replies go to your organizer inbox. **It does not forward incoming Gmail messages to another inbox.**
 
 ## 4. Deploy to Cloudflare Workers
 
@@ -130,14 +134,14 @@ Choose a Workers plan with suitable CPU/subrequest limits for SQL and scheduled 
 
 ### Automatic GitHub deployment
 
-The connected production service is `roomroster-demo` on branch `main`. `wrangler.jsonc` names that existing service, preserves root/www custom domains, sets `APP_URL=https://roomroster.me`, enables its workers.dev endpoint and keeps `triggers.crons=[]`.
+The connected production service is `roomroster-demo` on branch `main`. `wrangler.jsonc` names that existing service, preserves root/www custom domains, sets `APP_URL=https://roomroster.me`, enables its workers.dev endpoint and declares the two daily digest triggers plus the minute queue processor.
 
 - Build command: `npm run build`
 - Deploy command: `npx wrangler deploy`
 - Configure runtime secrets in Cloudflare, never in GitHub source files.
-- Run database migrations separately before releases that change the schema.
+- Run `node --env-file=.env --import tsx server/migrate.ts` when credentials are available locally. This release also creates only its missing participant-code/digest-job tables through the existing runtime DB secret; it never overwrites attendees.
 
-No cron triggers are proposed by the default configuration. Queued sending every five minutes and digests at 11:00/17:00 Asia/Kolkata remain a future plan, not an active schedule. Do not enable them until bounded batch processing and capacity checks pass. Do not expose the local development server as production.
+Schedules use UTC: `30 7 * * *` = 1 PM IST, `0 16 * * *` = 9:30 PM IST, and `* * * * *` drains small batches. Each profile/slot is deduplicated. Stale digest mail is cancelled rather than delivered on a later India date; only opted-in verified attendees receive updates. Empty-match updates still report event activity. Previously emailed or connected matches are excluded. [Cloudflare Cron documentation](https://developers.cloudflare.com/workers/configuration/cron-triggers/) explains UTC scheduling and propagation delays.
 
 ## 5. Verify admin login and the complete flow
 
@@ -146,11 +150,11 @@ No cron triggers are proposed by the default configuration. Queued sending every
 3. Enter the six-digit code on RoomRoster. It expires after **10 minutes**, works once, and allows at most five incorrect attempts. There is **no permanent admin password**.
 4. In the dashboard, check the service configuration and use **Send test email to admin**. A message accepted by Gmail still needs its actual inbox receipt checked.
 5. Create a second event. Verify both event lists and participant filtering; `/create` remains a contact-by-email page for visitors.
-6. Register two consenting test attendees, confirm their email links, send a connection request, and accept from the recipient's account. Contact details must remain private until acceptance.
+6. Register two consenting test attendees, enter their welcome email codes, send a connection request, and accept from the recipient's account. Contact details must remain private until acceptance.
 7. Remove a test participant and verify their profile and connections disappear from that event.
 8. Verify a scheduled match email after a relevant attendee joins, then test the unsubscribe link.
 
-**Email limits also apply to admin sign-in codes and test emails:** maximum three total messages per email address per India calendar day, with at most two recommendation messages. Repeated sign-in/testing can exhaust this allowance. A queued code or email after reaching the cap is expected; do not assume this is a Gmail failure. Admin sessions last eight hours. Participant email links do not grant admin privileges.
+**Email limits:** three automatic messages per address per India day, at most two digests. Requested admin/participant codes are separate, throttled and single-use, expire after 10 minutes and allow five guesses. Participant resend requests allow eight per address per 24-hour rate bucket and one per minute; the welcome email is separate. Admin sessions last eight hours; participant sessions last 30 days. Participant codes and legacy links never grant admin access.
 
 ## Delivery troubleshooting
 
@@ -158,7 +162,7 @@ No cron triggers are proposed by the default configuration. Queued sending every
 | --- | --- |
 | Directory/admin service unavailable | `DATABASE_URL`, migration success, `SESSION_SECRET`, Worker logs. Production never falls back to samples. |
 | Code cannot be delivered | Correct Gmail account, 2-Step Verification, app password, `SMTP_USER`, `SMTP_PASS`, `APP_URL`. |
-| Code queued / no new email | Daily three-email cap, pending queue, scheduled mail worker, and spam folder. Resend is throttled. |
+| No sign-in code | Check spam, SMTP delivery state and resend cooldown. Requested codes do not use the automatic-mail cap. A failed welcome leaves the saved profile recoverable through Sign in. |
 | Incorrect or expired code | Use the latest delivered code within 10 minutes. Older codes stop working after a new one is delivered. |
 | Email links point to localhost or another host | Correct `APP_URL` on the active deployment and request a fresh email. |
 | Origin not allowed | `APP_URL` must match the browser's actual site origin, including custom-domain changes. |
@@ -171,7 +175,7 @@ Do not run Netlify and Workers schedules simultaneously against the same databas
 
 `netlify.toml` remains supported. Add the same environment variables to Netlify, use its configuration from the repository, and redeploy. The configured build runs the idempotent migration when `DATABASE_URL` is present. Publish directory: `dist`; functions: `netlify/functions`. Set `APP_URL` to the Netlify/custom domain instead of the Workers URL. A static drag-and-drop upload alone does not configure the database or email services.
 
-See [PRODUCTION.md](PRODUCTION.md) for provider-specific behavior and [CHECKLIST.md](CHECKLIST.md) for the implementation history.
+See [ISSUES.md](ISSUES.md) for the current fix checklist, [PRODUCTION.md](PRODUCTION.md) for provider-specific behavior and [CHECKLIST.md](CHECKLIST.md) for the implementation history.
 
 ## Local development and tests
 
@@ -196,7 +200,7 @@ npm run workers:check
 npm audit
 ```
 
-Browser suites use the Vite sample roster for attendee flows and mock admin API responses. Run them with `VITE_DEMO_MODE=true` in the test environment (or an unconfigured local development environment). Do not use real participant data in tests. Backend tests use PostgreSQL/PGlite and mocked SMTP. Passing them does not replace the live checks above.
+Browser suites start isolated Vite servers on ports 5174 (demo) and 5175 (production API mode). They mock network responses and SMTP; the production-mode suite covers email-code onboarding, reload/back/edit, photo upload, own-profile protection and connection error/retry. No real attendee data is used. Backend tests use PostgreSQL/PGlite and mocked SMTP. Passing them does not replace the live checks above.
 
 ## Product scope and design
 

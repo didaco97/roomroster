@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { processDigests } from "../../server/digest";
 import { flush } from "../../server/mail";
 export default async function handler(req: Request) {
   const expected = Buffer.from(`Bearer ${process.env.SESSION_SECRET || ""}`),
@@ -9,5 +10,6 @@ export default async function handler(req: Request) {
     !timingSafeEqual(received, expected)
   )
     return new Response("Unauthorized", { status: 401 });
-  return new Response(JSON.stringify(await flush(50)));
+  await processDigests(2);
+  return new Response(JSON.stringify(await flush(2)));
 }

@@ -1,9 +1,15 @@
 @source "../components";
 @source "../App.tsx";
 @source "../Admin.tsx";
-.admin-mail-help { margin: 22px 0; }
-.organizer-row p { font-size: 14px; }
-.organizer-row small { overflow-wrap: anywhere; }
+.admin-mail-help {
+  margin: 22px 0;
+}
+.organizer-row p {
+  font-size: 14px;
+}
+.organizer-row small {
+  overflow-wrap: anywhere;
+}
 :root {
   --background: var(--ll-paper);
   --primary: var(--ll-ink);
@@ -1523,5 +1529,265 @@ button[data-slot="dialog-close"] {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Interaction feedback stays in the Looseleaf paper-and-ink palette. */
+.loading-spin {
+  animation: rr-spin 900ms linear infinite;
+}
+@keyframes rr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes rr-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.loading-room {
+  padding: 36px 0;
+  display: grid;
+  gap: 18px;
+}
+.skeleton-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  width: 100%;
+}
+.skeleton-cards span {
+  height: 180px;
+  border: 1px dashed #b5a995;
+  border-radius: 4px;
+  background: #e9e2d2;
+  animation: rr-pulse 1.4s ease-in-out infinite;
+}
+.photo-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  margin-bottom: 24px;
+}
+.photo-upload {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border: 2px dashed #927c56;
+  border-radius: 8px;
+  padding: 18px;
+  background: #fbf0c9;
+  cursor: pointer;
+  transition: background 180ms;
+}
+.photo-upload:hover {
+  background: #f6e6ad;
+}
+.photo-upload:focus-within {
+  outline: 3px solid var(--ll-focus);
+  outline-offset: 4px;
+}
+.photo-upload > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.photo-upload strong,
+.photo-upload small {
+  display: block;
+}
+.photo-upload small {
+  margin-top: 4px;
+  color: #594c38;
+  font-size: 13px;
+}
+.photo-file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.photo-upload .avatar {
+  flex-shrink: 0;
+}
+.sign-in-form {
+  display: grid;
+  gap: 12px;
+}
+.sign-in-form .field {
+  margin: 0;
+}
+.sign-in-form .otp-input {
+  letter-spacing: 0.45em;
+  font:
+    24px "IBM Plex Mono",
+    monospace;
+  min-height: 54px;
+}
+.sign-in-note {
+  color: #594c38;
+  font-size: 14px;
+}
+.sign-in-options {
+  justify-content: space-between;
+}
+.sign-in-join {
+  justify-content: center;
+}
+.pending-sign-in {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.returning-link {
+  float: right;
+}
+.text-link,
+.card-link,
+.notification,
+.mini-avatar,
+.filter,
+.choice {
+  min-height: 44px;
+}
+.notification,
+.mini-avatar {
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+button[data-slot="dialog-close"] {
+  min-width: 44px;
+  min-height: 44px;
+}
+.event-nav {
+  flex-wrap: wrap;
+  gap: 10px 24px;
+}
+.event-nav > a {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.profile-name,
+.startup,
+.detail-head p,
+.connection a,
+.match-row span,
+.organizer-row > div,
+.event-card h2 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+[data-slot="button"] {
+  white-space: normal;
+  height: auto;
+  min-height: 44px;
+}
+@media (max-width: 600px) {
+  .event-nav {
+    gap: 8px 20px;
+    padding: 6px 0;
+    font-size: 14px;
+  }
+  .event-hero h1 {
+    font-size: clamp(46px, 14vw, 64px);
+  }
+  .directory-title h1 {
+    font-size: clamp(34px, 10vw, 42px);
+  }
+  .header-right > .text-link {
+    font-size: 15px;
+  }
+  .form-actions {
+    flex-wrap: wrap;
+  }
+  .form-actions > [data-slot="button"]:last-child {
+    flex: 1;
+  }
+  .toolbar-bottom {
+    flex-wrap: wrap;
+  }
+  .toolbar-bottom > .inline-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .photo-upload {
+    gap: 12px;
+    padding: 14px;
+  }
+  .photo-upload .avatar {
+    width: 54px;
+    height: 54px;
+  }
+  .photo-upload > svg {
+    width: 19px;
+  }
+  .photo-upload small {
+    font-size: 12px;
+  }
+  .photo-field .avatar {
+    min-width: 54px;
+  }
+  .pending-sign-in {
+    align-items: start;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .search-box > input {
+    font-size: 16px;
+  }
+  .sign-in-options {
+    gap: 8px;
+  }
+  .returning-link {
+    float: none;
+    display: flex;
+    margin-top: 8px;
+  }
+  .skeleton-cards {
+    grid-template-columns: 1fr;
+  }
+  .skeleton-cards span:not(:first-child) {
+    display: none;
+  }
+  .rr-modal {
+    padding-bottom: max(24px, env(safe-area-inset-bottom)) !important;
+  }
+  .toast {
+    bottom: max(18px, env(safe-area-inset-bottom));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-spin,
+  .skeleton-cards span {
+    animation: none;
+  }
+}
+
+@media (max-width: 360px) {
+  .logo {
+    font-size: 22px;
+    gap: 6px;
+  }
+  .logo-mark {
+    width: 23px;
+    height: 29px;
+  }
+  .logo-dot {
+    font-size: 18px;
+  }
+  header {
+    gap: 8px;
+  }
+  .header-right {
+    gap: 8px;
   }
 }

@@ -1,5 +1,7 @@
 # RoomRoster implementation checklist
 
+Current release checklist: [ISSUES.md](ISSUES.md). Earlier entries below are historical; [README.md](README.md) records the current deployment state.
+
 ## Build sequence
 - [x] 1. Set up React/TypeScript, actual Looseleaf components/fonts, and Netlify configuration.
 - [x] 2. Build event welcome, RoomRoster landing, and event creation pages.

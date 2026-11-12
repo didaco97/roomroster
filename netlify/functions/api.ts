@@ -14,6 +14,10 @@ import {
 import { queue, flush } from "../../server/mail";
 import { match } from "../../server/matching";
 import {
+  consumeParticipantCode,
+  participantCookie,
+} from "../../server/participant-auth";
+import {
   adminEmail,
   consumeAdminCode,
   isPlatformAdmin,
@@ -54,7 +58,7 @@ export default async function handler(req: Request) {
     const sql = db();
     const email = await identity(req);
     const ip = req.headers.get("x-nf-client-connection-ip") || "unknown";
-    await rate(`api:${ip}`, 120, 1);
+    await rate(`api:${ip}`, 300, 1);
     const platformAdmin = await isPlatformAdmin(req);
     if (action === "admin-request-code") {
       await rate("admin-request:" + ip, 5, 60);
@@ -247,24 +251,61 @@ export default async function handler(req: Request) {
         admin: isAdmin,
       });
     }
-    if (action === "access") {
+    if (action === "participant-login") {
+      await rate(`participant-verify:${ip}`, 150, 15);
       const address = emailSchema.parse(b.email);
-      await rate(`access:${address}`, 2);
-      await rate(`access-ip:${ip}`, 5);
+      if (!(await consumeParticipantCode(event, address, b.code)))
+        return json(
+          {
+            error:
+              "That code is incorrect, expired, or already used. Request a new code if needed.",
+          },
+          401,
+        );
+      await sql`UPDATE profiles SET verified=true WHERE event=${event} AND email=${address}`;
+      return json({ ok: true }, 200, {
+        "Set-Cookie": await participantCookie(address),
+      });
+    }
+    if (action === "access" || action === "participant-request-code") {
+      const address = emailSchema.parse(b.email);
+      await rate(`participant-resend:${address}`, 1, 1);
+      await rate(`participant-code:${address}`, 8, 1440);
+      await rate(`participant-code-ip:${ip}`, 120);
+      if (
+        !process.env.SMTP_USER ||
+        !process.env.SMTP_PASS ||
+        !process.env.APP_URL
+      )
+        return json(
+          {
+            error:
+              "Email sign-in is temporarily unavailable. Please try again shortly.",
+          },
+          503,
+        );
       const p = (
         await sql`SELECT id FROM profiles WHERE event=${event} AND email=${address}`
       )[0];
-      if (
-        p ||
-        address === ev.owner ||
-        address === (process.env.ORGANIZER_EMAIL || "roomroster07@gmail.com")
-      ) {
-        await queue(address, event, "access", {}, `access:${randomUUID()}`);
-        await flush(1);
+      if (p) {
+        await sql`UPDATE mail_queue SET state='cancelled' WHERE email=${address} AND event=${event} AND kind IN ('participant-code','welcome') AND state='pending'`;
+        const dedupe = `participant-code:${randomUUID()}`;
+        await queue(address, event, "participant-code", {}, dedupe);
+        await flush(1, address, dedupe);
+        const delivery = (
+          await sql`SELECT state FROM mail_queue WHERE dedupe=${dedupe}`
+        )[0];
+        if (delivery.state !== "sent")
+          return json(
+            {
+              error: "We couldn't send the code. Please try again in a minute.",
+            },
+            503,
+          );
       }
       return json({
         message:
-          "If this email belongs to a participant or organizer, a secure link is on its way. Check your inbox and spam folder.",
+          "If you have a profile in this event, a six-digit code is on its way. Check your inbox and spam folder.",
       });
     }
     if (action === "register") {
@@ -282,7 +323,7 @@ export default async function handler(req: Request) {
         );
       if (ev.data.closed)
         return json({ error: "This event has closed registrations." }, 409);
-      await rate(`register:${ip}`, 10);
+      await rate(`register:${ip}`, 60);
       const p = profileSchema.parse(b.profile);
       const id = randomUUID();
       const { email: address, phone, ...data } = p;
@@ -292,17 +333,26 @@ export default async function handler(req: Request) {
         return json(
           {
             error:
-              "This email already has a profile. Use “Return to your profile” to receive a secure link.",
+              "This email already has a profile. Sign in with an email code to edit it.",
+            code: "PROFILE_EXISTS",
           },
           409,
         );
       await queue(address, event, "welcome", { name: p.name }, `welcome:${id}`);
-      await flush(1, address);
+      await flush(1, address, `welcome:${id}`);
+      const delivery = (
+        await sql`SELECT state FROM mail_queue WHERE dedupe=${`welcome:${id}`}`
+      )[0];
       // No identity is issued until email ownership is confirmed.
-      return json({ ok: true, id, verificationRequired: true });
+      return json({
+        ok: true,
+        id,
+        verificationRequired: true,
+        codeSent: delivery.state === "sent",
+      });
     }
     if (action === "search") {
-      await rate(`search:${ip}`, 15, 1);
+      await rate(`search:${ip}`, 150, 1);
       const query = String(b.query || "").slice(0, 400);
       const rows = await sql`SELECT * FROM profiles WHERE event=${event}`;
       const self =
@@ -321,10 +371,7 @@ export default async function handler(req: Request) {
       });
     }
     if (!email && !platformAdmin)
-      return json(
-        { error: "Use the secure link in your email to continue." },
-        401,
-      );
+      return json({ error: "Sign in with an email code to continue." }, 401);
     if (action === "event-update") {
       if (!isAdmin) return json({ error: "Organizer access required." }, 403);
       const details = eventSchema.parse(b.details);
@@ -365,18 +412,8 @@ export default async function handler(req: Request) {
           { error: "Choose another participant in this event." },
           400,
         );
-      const added =
-        await sql`INSERT INTO connections(id,event,sender,recipient) VALUES(${randomUUID()},${event},${mine.id},${to.id}) ON CONFLICT DO NOTHING RETURNING id`;
-      if (added.length) {
-        await queue(
-          to.email,
-          event,
-          "connection",
-          { name: mine.data.name },
-          `connection:${added[0].id}`,
-        );
-        await flush(1);
-      }
+      await sql`INSERT INTO connections(id,event,sender,recipient) VALUES(${randomUUID()},${event},${mine.id},${to.id}) ON CONFLICT DO NOTHING RETURNING id`;
+      // Requests are visible immediately; the two scheduled updates include them.
       return json({ ok: true });
     }
     if (action === "respond") {

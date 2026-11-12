@@ -34,19 +34,40 @@ export async function api<T = any>(
   body: Record<string, any> = {},
 ): Promise<T> {
   if (!DEMO || action.startsWith("admin-") || action === "create-event") {
-    const r = await fetch(`/api/${action}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = await r.json().catch(() => {
-      throw Error(
-        "The service is unavailable. Please check that the server and database are connected.",
-      );
-    });
-    if (!r.ok)
-      throw new Error(data.error || "Something went wrong. Please try again.");
-    return data;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const r = await fetch(`/api/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        credentials: "same-origin",
+        signal: controller.signal,
+      });
+      const data = await r.json().catch(() => {
+        throw Error(
+          "The service is unavailable. Please check that the server and database are connected.",
+        );
+      });
+      if (!r.ok)
+        throw Object.assign(
+          new Error(data.error || "Something went wrong. Please try again."),
+          { code: data.code, status: r.status },
+        );
+      return data;
+    } catch (error) {
+      if (controller.signal.aborted)
+        throw Error(
+          "That took longer than expected. Refresh to check whether it saved, then try again.",
+        );
+      if (error instanceof TypeError)
+        throw Error(
+          "Couldn’t reach RoomRoster. Check your connection and try again.",
+        );
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
   const s = read();
   if (!localStorage.getItem("roomroster-v1")) {
@@ -110,6 +131,7 @@ export async function api<T = any>(
       break;
     case "connect":
       if (!me) throw Error("Join the directory first.");
+      if (me.id === body.to) throw Error("Choose another participant.");
       if (
         !s.connections.some(
           (c) =>
@@ -167,11 +189,20 @@ export async function api<T = any>(
       delete s.self[event];
       result = { ok: true };
       break;
+    case "participant-request-code":
+      result = { message: "Preview code: 123456. No email was sent." };
+      break;
+    case "participant-login":
+      if (body.code !== "123456") throw Error("Use preview code 123456.");
     case "access": {
       const p = s.profiles.find(
         (p) => p.event === event && p.email === body.email,
       );
-      if (p) s.self[event] = p.id;
+      if (!p)
+        throw Error(
+          "No profile for this email in this event. Join the room first.",
+        );
+      s.self[event] = p.id;
       result = {
         message: p
           ? "Preview profile restored on this device."

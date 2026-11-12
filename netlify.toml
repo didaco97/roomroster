@@ -8,7 +8,7 @@
   directory = "netlify/functions"
   node_bundler = "esbuild"
 [functions.digest]
-  schedule = "30 5,11 * * *"
+  schedule = "30 7 * * *"
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/api/:splat"

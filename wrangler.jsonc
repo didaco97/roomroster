@@ -15,8 +15,8 @@
     { "pattern": "roomroster.me", "custom_domain": true },
     { "pattern": "www.roomroster.me", "custom_domain": true }
   ],
-  // Keep automatic sending off until bounded capacity and delivery checks pass.
-  "triggers": { "crons": [] },
+  // India time: 1 PM and 9:30 PM. Minute ticks deliver bounded batches.
+  "triggers": { "crons": ["* * * * *", "30 7 * * *", "0 16 * * *"] },
   "observability": { "enabled": true },
   "vars": {
     "APP_URL": "https://roomroster.me",

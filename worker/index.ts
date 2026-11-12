@@ -1,5 +1,10 @@
 import api from "../netlify/functions/api";
-import digest from "../server/digest";
+import {
+  enqueueDigests,
+  processDigests,
+  digestSlot,
+  DIGEST_CRONS,
+} from "../server/digest";
 import { flush } from "../server/mail";
 type Env = { ASSETS: { fetch: (request: Request) => Promise<Response> } };
 export default {
@@ -21,8 +26,14 @@ export default {
     out.headers.set("X-Frame-Options", "DENY");
     return out;
   },
-  async scheduled(controller: { cron: string }) {
-    if (controller.cron === "30 5,11 * * *") await digest();
-    else await flush(50);
+  async scheduled(controller: { cron: string; scheduledTime?: number }) {
+    if (DIGEST_CRONS.includes(controller.cron))
+      await enqueueDigests(
+        digestSlot(new Date(controller.scheduledTime ?? Date.now())),
+      );
+    else {
+      await processDigests(2);
+      await flush(2);
+    }
   },
 };

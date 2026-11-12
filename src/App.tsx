@@ -3,6 +3,7 @@ import {
   useState,
   useCallback,
   useId,
+  useRef,
   type ReactNode,
   type FormEvent,
 } from "react";
@@ -36,6 +37,9 @@ import {
   LogOut,
   Copy,
   CalendarDays,
+  Camera,
+  Upload,
+  LoaderCircle,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -49,6 +53,7 @@ import {
 } from "./components/ui/dialog";
 import { api, DEMO } from "./api";
 import Admin from "./Admin";
+import ParticipantLogin from "./ParticipantLogin";
 import {
   blankProfile,
   eventDefault,
@@ -96,9 +101,26 @@ function Modal({
   children: ReactNode;
   close: () => void;
 }) {
+  const opener = useRef(document.activeElement as HTMLElement | null);
   return (
     <Dialog open onOpenChange={(v) => !v && close()}>
-      <DialogContent className="rr-modal">
+      <DialogContent
+        className="rr-modal"
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          const target = opener.current;
+          if (
+            target?.isConnected &&
+            target !== document.body &&
+            !target.closest('[role="dialog"]')
+          )
+            target.focus({ preventScroll: true });
+          else
+            document
+              .querySelector<HTMLElement>("#main")
+              ?.focus({ preventScroll: true });
+        }}
+      >
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription>
         {children}
@@ -203,8 +225,10 @@ function ProfileCard({
   p,
   open,
   reason,
+  isSelf = false,
 }: {
   p: Profile;
+  isSelf?: boolean;
   open: () => void;
   reason?: string;
 }) {
@@ -212,7 +236,7 @@ function ProfileCard({
     <Paper stock="card" className="profile-card">
       <div className="card-top">
         <Avatar p={p} />
-        <span className="sector">{p.sector}</span>
+        <span className="sector">{isSelf ? "Your profile" : p.sector}</span>
       </div>
       <button className="profile-name" onClick={open}>
         {p.name}
@@ -244,7 +268,7 @@ function ProfileCard({
         </p>
       )}
       <button className="card-link" onClick={open}>
-        Say hello <ArrowRight size={17} />
+        {isSelf ? "View your profile" : "Say hello"} <ArrowRight size={17} />
       </button>
     </Paper>
   );
@@ -274,7 +298,7 @@ export default function App() {
           path="/admin/*"
           element={<Admin createForm={<CreateEvent />} />}
         />
-        <Route path="/e/:slug/*" element={<EventApp />} />
+        <Route path="/e/:slug/*" element={<EventRoute />} />
         <Route
           path="*"
           element={
@@ -311,7 +335,7 @@ function Landing() {
           </Link>
         </Button>
       </header>
-      <main id="main">
+      <main id="main" tabIndex={-1}>
         <section className="landing-hero">
           <span className="eyebrow">
             LESS AWKWARD NETWORKING. MORE GOOD CONNECTIONS.
@@ -562,6 +586,10 @@ function CreateEvent() {
     </div>
   );
 }
+function EventRoute() {
+  const { slug } = useParams();
+  return <EventApp key={slug} />;
+}
 function EventApp() {
   const { slug = "" } = useParams();
   const loc = useLocation();
@@ -571,10 +599,23 @@ function EventApp() {
   const [data, setData] = useState<Data>();
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+  const [actionError, setActionError] = useState("");
   const [access, setAccess] = useState(false);
-  const [email, setEmail] = useState("");
+  const pendingKey = `roomroster-pending:${slug}`;
+  const [pendingLogin, setPendingLogin] = useState<{
+    email: string;
+    codeSent: boolean;
+  } | null>(() => {
+    try {
+      const email = sessionStorage.getItem(pendingKey);
+      return email ? { email, codeSent: true } : null;
+    } catch {
+      return null;
+    }
+  });
   const [selected, select] = useState<Profile>();
   const [recommend, setRecommend] = useState(false);
+  const [matchingBusy, setMatchingBusy] = useState(false);
   const [onboarded, setOnboarded] = useState<Profile>();
   const [smartMatches, setSmartMatches] = useState<
     ReturnType<typeof rankProfiles>
@@ -586,10 +627,11 @@ function EventApp() {
       setError("");
     } catch (e) {
       setError((e as Error).message);
+      throw e;
     }
   }, [slug]);
   useEffect(() => {
-    load();
+    load().catch(() => {});
   }, [load]);
   useEffect(() => {
     if (!toast) return;
@@ -600,13 +642,18 @@ function EventApp() {
     if (data && page.startsWith("/people/"))
       select(data.profiles.find((p) => p.id === page.split("/")[2]));
   }, [data, page]);
+  useEffect(() => {
+    setActionError("");
+  }, [selected?.id]);
   async function action(name: string, body: Record<string, any> = {}) {
     setBusy(true);
+    setActionError("");
     try {
       const r = await api(name, { event: slug, ...body });
       await load();
       return r;
     } catch (e) {
+      setActionError((e as Error).message);
       setToast((e as Error).message);
     } finally {
       setBusy(false);
@@ -622,11 +669,15 @@ function EventApp() {
     }
     setSmartMatches(rankProfiles(query, data.profiles, user.id).slice(0, 3));
     let active = true;
+    setMatchingBusy(true);
     api("search", { event: slug, query, self: user.id, useAI: user.aiConsent })
       .then((r) => {
         if (active) setSmartMatches(r.matches.slice(0, 3));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (active) setMatchingBusy(false);
+      });
     return () => {
       active = false;
     };
@@ -635,8 +686,24 @@ function EventApp() {
     return (
       <main id="main" className="standalone">
         <Logo />
-        <p role="status">{error || "Opening your room…"}</p>
-        {error && <Button onClick={load}>Try again</Button>}
+        <div role="status" className="loading-room">
+          {error ? (
+            <p>{error}</p>
+          ) : (
+            <>
+              <LoaderCircle className="loading-spin" size={28} />
+              <p>Opening your room…</p>
+              <div className="skeleton-cards" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </div>
+            </>
+          )}
+        </div>
+        {error && (
+          <Button onClick={() => load().catch(() => {})}>Try again</Button>
+        )}
       </main>
     );
   const event = data.event;
@@ -657,14 +724,19 @@ function EventApp() {
   async function connect(p: Profile) {
     if (!me) {
       select(undefined);
-      nav(base + "/join");
+      setAccess(true);
+      return;
+    }
+    if (p.id === me.id) {
+      nav(base + "/profile");
+      select(undefined);
       return;
     }
     if (await action("connect", { to: p.id }))
       setToast(
         DEMO
           ? "Request saved in preview. No email was sent."
-          : "Request sent. We’ll notify them by email.",
+          : "Request sent. They can accept in their connections.",
       );
   }
   return (
@@ -693,32 +765,51 @@ function EventApp() {
             </>
           ) : (
             <button className="text-link" onClick={() => setAccess(true)}>
-              Return to your profile <ArrowUpRight size={14} />
+              Sign in <ArrowUpRight size={14} />
             </button>
           )}
         </div>
       </header>
       <nav className="event-nav" aria-label="Event navigation">
         <Link className={page === "/" ? "active" : ""} to={base}>
-          The gathering
+          Event
         </Link>
         <Link
           className={page === "/directory" ? "active" : ""}
           to={base + "/directory"}
         >
-          People directory <span>{data.profiles.length}</span>
+          People <span>{data.profiles.length}</span>
         </Link>
         {me && (
           <Link
             className={page === "/connections" ? "active" : ""}
             to={base + "/connections"}
           >
-            My connections
+            Connections
           </Link>
         )}
         {data.admin && <Link to={base + "/organizer"}>Organizer</Link>}
       </nav>
-      <main id="main">
+      <main id="main" tabIndex={-1}>
+        {!me && pendingLogin && (
+          <div className="notice pending-sign-in">
+            <span>Your profile is saved. Sign in to connect or edit.</span>
+            <button className="text-link" onClick={() => setAccess(true)}>
+              Enter email code <ArrowRight size={16} />
+            </button>
+          </div>
+        )}
+        {error && (
+          <p className="notice" role="alert">
+            {error}{" "}
+            <button
+              className="text-link"
+              onClick={() => load().catch(() => {})}
+            >
+              Refresh
+            </button>
+          </p>
+        )}
         {page === "/" && (
           <>
             <section className="event-hero">
@@ -820,7 +911,12 @@ function EventApp() {
             </div>
             <div className="profile-grid preview-grid">
               {data.profiles.slice(0, 3).map((p) => (
-                <ProfileCard key={p.id} p={p} open={() => select(p)} />
+                <ProfileCard
+                  key={p.id}
+                  p={p}
+                  isSelf={p.id === me?.id}
+                  open={() => select(p)}
+                />
               ))}
             </div>
             <section className="about-event">
@@ -834,31 +930,70 @@ function EventApp() {
             </section>
           </>
         )}
-        {(page === "/join" || page === "/profile") && (
-          <Onboarding
-            key={page}
-            event={event}
-            existing={page === "/profile" ? me : undefined}
-            closed={event.closed}
-            onComplete={async (p) => {
-              const r = await api(page === "/profile" ? "update" : "register", {
-                event: slug,
-                profile: p,
-              });
-              await load();
-              nav(base + "/directory");
-              if (page === "/join") {
-                setOnboarded({
-                  ...p,
-                  id: r.id || "new",
-                  event: slug,
-                  joined: new Date().toISOString(),
-                });
-                setRecommend(true);
-              } else setToast("Your profile is updated.");
-              return r;
-            }}
-          />
+        {page === "/profile" && !me ? (
+          <section className="form-page">
+            <h1>Your profile is waiting.</h1>
+            <p>Sign in with the email you joined with.</p>
+            <Paper stock="card" className="form-paper">
+              <ParticipantLogin
+                event={slug}
+                initialEmail={pendingLogin?.email}
+                onAuthenticated={async () => {
+                  await load();
+                  setPendingLogin(null);
+                  sessionStorage.removeItem(pendingKey);
+                }}
+                onJoin={() => nav(base + "/join")}
+              />
+            </Paper>
+          </section>
+        ) : (
+          (page === "/join" || page === "/profile") && (
+            <Onboarding
+              key={me?.id || "new"}
+              event={event}
+              existing={me}
+              onSignIn={() => setAccess(true)}
+              closed={event.closed}
+              onComplete={async (p) => {
+                let r;
+                try {
+                  r = await api(me ? "update" : "register", {
+                    event: slug,
+                    profile: p,
+                  });
+                } catch (e) {
+                  if ((e as { code?: string }).code === "PROFILE_EXISTS") {
+                    setPendingLogin({ email: p.email, codeSent: false });
+                    setAccess(true);
+                  }
+                  throw e;
+                }
+                if (r.verificationRequired) {
+                  try {
+                    sessionStorage.setItem(pendingKey, p.email);
+                  } catch {}
+                  setPendingLogin({ email: p.email, codeSent: !!r.codeSent });
+                  setAccess(true);
+                  await load();
+                  nav(base + "/directory");
+                } else {
+                  await load();
+                  nav(base + "/directory");
+                  if (!me) {
+                    setOnboarded({
+                      ...p,
+                      id: r.id,
+                      event: slug,
+                      joined: new Date().toISOString(),
+                    });
+                    setRecommend(true);
+                  } else setToast("Your profile is updated.");
+                }
+                return r;
+              }}
+            />
+          )
         )}
         {(page === "/directory" || page.startsWith("/people/")) && (
           <Directory
@@ -1042,6 +1177,11 @@ function EventApp() {
               Copy link
             </button>
           </div>
+          {actionError && (
+            <p className="notice" role="alert">
+              {actionError}
+            </p>
+          )}
           {selected.id !== me?.id && (
             <Button
               disabled={
@@ -1052,22 +1192,36 @@ function EventApp() {
               }
               onClick={() => connect(selected)}
             >
-              <Handshake size={17} />
-              {data.connections.find((c) =>
-                [c.from, c.to].includes(selected.id),
-              )?.status === "accepted"
-                ? "Connected"
+              {busy ? (
+                <LoaderCircle className="loading-spin" size={17} />
+              ) : (
+                <Handshake size={17} />
+              )}
+              {busy
+                ? "Sending request…"
                 : data.connections.find((c) =>
                       [c.from, c.to].includes(selected.id),
-                    )
-                  ? "Request recorded"
-                  : "Request to connect"}
+                    )?.status === "accepted"
+                  ? "Connected"
+                  : data.connections.find((c) =>
+                        [c.from, c.to].includes(selected.id),
+                      )
+                    ? "Request recorded"
+                    : "Request to connect"}
             </Button>
           )}
-          <small>
-            By requesting or accepting, you agree to share your email and
-            optional phone with this person after acceptance.
-          </small>
+          {selected.id === me?.id ? (
+            <Button
+              onClick={() => {
+                select(undefined);
+                nav(base + "/profile");
+              }}
+            >
+              Edit my profile
+            </Button>
+          ) : (
+            <small>Contact details are shared only after acceptance.</small>
+          )}
         </Modal>
       )}
       {recommend && (
@@ -1082,34 +1236,40 @@ function EventApp() {
               ownership before connecting or editing.
             </p>
           )}
-          {matches.length ? (
-            matches.map((m) => (
-              <button
-                className="match-row"
-                key={m.profile.id}
-                onClick={() => {
-                  setRecommend(false);
-                  select(m.profile);
-                }}
-              >
-                <Avatar p={m.profile} />
-                <span>
-                  <strong>{m.profile.name}</strong>
-                  <small>{m.reason}</small>
-                </span>
-                <ArrowUpRight size={20} />
-              </button>
-            ))
-          ) : (
-            <div className="empty">
-              <Sparkles size={30} />
-              <p>
-                {matchUser?.needs.length || matchUser?.needText
-                  ? "No close matches yet. We can let you know when someone relevant joins."
-                  : "Add what you’re looking for to your profile to see useful introductions."}
-              </p>
-            </div>
+          {matchingBusy && (
+            <p role="status" className="inline-actions">
+              <LoaderCircle className="loading-spin" size={18} /> Finding your
+              people…
+            </p>
           )}
+          {matches.length
+            ? matches.map((m) => (
+                <button
+                  className="match-row"
+                  key={m.profile.id}
+                  onClick={() => {
+                    setRecommend(false);
+                    select(m.profile);
+                  }}
+                >
+                  <Avatar p={m.profile} />
+                  <span>
+                    <strong>{m.profile.name}</strong>
+                    <small>{m.reason}</small>
+                  </span>
+                  <ArrowUpRight size={20} />
+                </button>
+              ))
+            : !matchingBusy && (
+                <div className="empty">
+                  <Sparkles size={30} />
+                  <p>
+                    {matchUser?.needs.length || matchUser?.needText
+                      ? "No close matches yet. We can let you know when someone relevant joins."
+                      : "Add what you’re looking for to your profile to see useful introductions."}
+                  </p>
+                </div>
+              )}
           <Button variant="outline" onClick={() => setRecommend(false)}>
             Explore the directory <ArrowRight size={16} />
           </Button>
@@ -1117,33 +1277,32 @@ function EventApp() {
       )}
       {access && (
         <Modal
-          title="Welcome back."
-          description="Enter the email you joined with. We’ll send a secure link to your profile—no password needed."
+          title={pendingLogin ? "One last step." : "Welcome back."}
+          description="Sign in with a code sent to your email."
           close={() => setAccess(false)}
         >
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const r = await action("access", { email });
-              if (r) {
-                setToast(r.message);
-                setAccess(false);
-              }
+          <ParticipantLogin
+            event={slug}
+            initialEmail={pendingLogin?.email}
+            initialCodeSent={pendingLogin?.codeSent}
+            onAuthenticated={async () => {
+              await load();
+              const isNew = !!pendingLogin;
+              setPendingLogin(null);
+              setAccess(false);
+              setOnboarded(undefined);
+              try {
+                sessionStorage.removeItem(pendingKey);
+              } catch {}
+              nav(base + "/directory");
+              if (isNew) setRecommend(true);
+              else setToast("Welcome back. You’re signed in.");
             }}
-          >
-            <Field label="Your email">
-              <Input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </Field>
-            <Button disabled={busy} type="submit">
-              {DEMO ? "Restore preview profile" : "Email my secure link"}
-              <Mail size={16} />
-            </Button>
-          </form>
+            onJoin={() => {
+              setAccess(false);
+              nav(base + "/join");
+            }}
+          />
         </Modal>
       )}
     </div>
@@ -1182,6 +1341,7 @@ function Directory({
         event: event.slug,
         query: q,
         self: data.me?.id,
+        useAI: data.me?.aiConsent ?? false,
       });
       setResults(r.matches);
       setMode(r.mode);
@@ -1203,7 +1363,7 @@ function Directory({
         : a.profile.name.localeCompare(b.profile.name),
     );
   const suggestions = q.trim()
-    ? rankProfiles(q, data.profiles).slice(0, 3)
+    ? rankProfiles(q, data.profiles, data.me?.id).slice(0, 3)
     : [];
   return (
     <section className="directory">
@@ -1213,10 +1373,7 @@ function Directory({
           <h1>
             Your people are <span className="highlight">in here.</span>
           </h1>
-          <p>
-            A room full of different skills. Find the ones that fit your next
-            step.
-          </p>
+          <p>Find someone who can help with your next step.</p>
         </div>
         <span className="directory-doodle">
           hello!<span>↙</span>
@@ -1242,7 +1399,11 @@ function Directory({
             maxLength={400}
           />
           <Button type="submit" disabled={loading}>
-            <Sparkles size={16} />
+            {loading ? (
+              <LoaderCircle className="loading-spin" size={16} />
+            ) : (
+              <Sparkles size={16} />
+            )}
             <span>{loading ? "Finding…" : "Find people"}</span>
           </Button>
         </form>
@@ -1266,10 +1427,7 @@ function Directory({
           </div>
         )}
         <p className="search-hint">
-          Search a name, skill, or a whole idea.{" "}
-          {DEMO
-            ? "Preview uses skill matching."
-            : "AI-assisted results when available; skill search is always available."}
+          Search a name, skill, or something you need.
         </p>
       </div>
       <div className="directory-toolbar">
@@ -1343,6 +1501,7 @@ function Directory({
           <ProfileCard
             key={m.profile.id}
             p={m.profile}
+            isSelf={m.profile.id === data.me?.id}
             open={() => open(m.profile)}
             reason={searched ? m.reason : undefined}
           />
@@ -1382,7 +1541,9 @@ function Onboarding({
   existing,
   onComplete,
   closed,
+  onSignIn,
 }: {
+  onSignIn: () => void;
   event: EventInfo;
   existing?: Profile;
   closed?: boolean;
@@ -1392,6 +1553,8 @@ function Onboarding({
   const [step, next] = useState(1);
   const [error, err] = useState("");
   const [busy, setBusy] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const photoId = useId();
   const setField = (k: string, v: any) => set((prev) => ({ ...prev, [k]: v }));
   async function photo(file?: File) {
     if (!file) return;
@@ -1402,6 +1565,7 @@ function Onboarding({
       err("Choose a JPG, PNG, or WebP image under 5 MB.");
       return;
     }
+    setPhotoBusy(true);
     try {
       const img = await createImageBitmap(file);
       const canvas = document.createElement("canvas");
@@ -1424,6 +1588,8 @@ function Onboarding({
       err("");
     } catch {
       err("Could not read that photo. Please try another.");
+    } finally {
+      setPhotoBusy(false);
     }
   }
   async function submit(e: FormEvent) {
@@ -1447,27 +1613,32 @@ function Onboarding({
     <section className="form-page">
       <Link className="text-link" to={`/e/${event.slug}/directory`}>
         <ArrowLeft size={15} />
-        Back to the room
+        Back to directory
       </Link>
+      {!existing && (
+        <button
+          type="button"
+          className="text-link returning-link"
+          onClick={onSignIn}
+        >
+          Sign in instead
+        </button>
+      )}
       <div className="step-label">
-        <span className={step === 1 ? "current" : ""}>
-          01 · A little about you
-        </span>
+        <span className={step === 1 ? "current" : ""}>01 · About you</span>
         <span>—</span>
-        <span className={step === 2 ? "current" : ""}>
-          02 · Your kind of people
-        </span>
+        <span className={step === 2 ? "current" : ""}>02 · Your people</span>
       </div>
       <h1>
         {existing
           ? "Make it feel like you."
           : step === 1
-            ? "Every good connection\nstarts with you."
-            : "What brings you\nto the room?"}
+            ? "Let’s get to know you."
+            : "Find your kind of people."}
       </h1>
       <p>
         {step === 1
-          ? "A few details so people have more than a name to say hello to."
+          ? "Help people put a face to a name."
           : "Pick a few roles, add your own words, or skip these for now."}
       </p>
       <Paper stock="card" className="form-paper">
@@ -1475,31 +1646,54 @@ function Onboarding({
           {step === 1 ? (
             <>
               <div className="photo-field">
-                <div className="avatar large">
-                  {p.photo ? (
-                    <img src={p.photo} alt="Your uploaded photo" />
-                  ) : (
-                    <Users size={32} />
-                  )}
-                </div>
-                <Field
-                  label="A face to go with your name (optional)"
-                  hint="JPG, PNG or WebP · up to 5 MB"
+                <label
+                  className="photo-upload"
+                  htmlFor={photoId}
+                  aria-busy={photoBusy}
                 >
+                  <span className="avatar large">
+                    {p.photo ? (
+                      <img src={p.photo} alt="Your uploaded photo" />
+                    ) : (
+                      <Camera size={30} aria-hidden="true" />
+                    )}
+                  </span>
+                  <span>
+                    <strong>
+                      {photoBusy
+                        ? "Preparing photo…"
+                        : p.photo
+                          ? "Change your photo"
+                          : "Add your photo"}
+                    </strong>
+                    <small>Optional · JPG, PNG or WebP · up to 5 MB</small>
+                  </span>
+                  {photoBusy ? (
+                    <LoaderCircle className="loading-spin" size={22} />
+                  ) : (
+                    <Upload size={22} aria-hidden="true" />
+                  )}
                   <input
+                    id={photoId}
+                    className="photo-file-input"
                     aria-label="Upload founder photo"
                     type="file"
                     accept="image/jpeg,image/png,image/webp"
-                    onChange={(e) => photo(e.target.files?.[0])}
+                    disabled={photoBusy}
+                    onChange={(e) => {
+                      photo(e.target.files?.[0]);
+                      e.target.value = "";
+                    }}
                   />
-                </Field>
+                </label>
                 {p.photo && (
                   <button
                     className="text-link"
                     type="button"
+                    disabled={photoBusy}
                     onClick={() => setField("photo", "")}
                   >
-                    Remove
+                    Remove photo
                   </button>
                 )}
               </div>
@@ -1586,7 +1780,7 @@ function Onboarding({
                 </Field>
                 <Field
                   label="LinkedIn URL"
-                  hint="No LinkedIn? No problem. This is just an optional link."
+                  hint="Optional — no LinkedIn needed."
                 >
                   <Input
                     type="url"
@@ -1645,10 +1839,9 @@ function Onboarding({
                   onChange={(e) => setField("alerts", e.target.checked)}
                 />
                 <span>
-                  Email me when relevant people join.
+                  Send me event updates and matches.
                   <small>
-                    Up to two match updates daily. You can turn these off
-                    anytime.
+                    At 1 PM and 9:30 PM India time. Unsubscribe anytime.
                   </small>
                 </span>
               </label>
@@ -1689,9 +1882,13 @@ function Onboarding({
                 Back
               </Button>
             )}
-            <Button type="submit" disabled={busy || (!existing && closed)}>
+            <Button
+              type="submit"
+              disabled={busy || photoBusy || (!existing && closed)}
+            >
+              {busy && <LoaderCircle className="loading-spin" size={17} />}
               {busy
-                ? "Saving your place…"
+                ? "Saving your profile…"
                 : step === 1
                   ? "Next: find your people"
                   : existing
@@ -1721,7 +1918,10 @@ function Organizer({
     return (
       <section className="content-page">
         <h1>Organizer access</h1>
-        <p>Use your organizer email’s secure link to manage this event.</p>
+        <p>
+          <Link to="/admin">Sign in to the admin dashboard</Link> to manage this
+          event.
+        </p>
       </section>
     );
   return (

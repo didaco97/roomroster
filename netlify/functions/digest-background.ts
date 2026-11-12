@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import run from "../../server/digest";
+import { enqueueDigests } from "../../server/digest";
 export default async function handler(req: Request) {
   const expected = Buffer.from(`Bearer ${process.env.SESSION_SECRET || ""}`);
   const received = Buffer.from(req.headers.get("authorization") || "");
@@ -9,5 +9,6 @@ export default async function handler(req: Request) {
     !timingSafeEqual(received, expected)
   )
     return new Response("Unauthorized", { status: 401 });
-  return run();
+  await enqueueDigests();
+  return new Response("Digests queued");
 }

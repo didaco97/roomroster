@@ -167,7 +167,10 @@ export function rankProfiles(
     .sort((a, b) => b.score - a.score);
 }
 export function canSend(total: number, recommendations: number, kind: string) {
-  return total < 3 && (kind !== "match" || recommendations < 2);
+  return (
+    ["admin-code", "participant-code"].includes(kind) ||
+    (total < 3 && (kind !== "match" || recommendations < 2))
+  );
 }
 export function indiaDay(date = new Date()) {
   return new Intl.DateTimeFormat("en-CA", {

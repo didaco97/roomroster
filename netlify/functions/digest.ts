@@ -13,4 +13,4 @@ export default async function handler() {
   if (!response.ok) throw Error("Digest dispatch failed.");
   return new Response("Digest dispatched.");
 }
-export const config = { schedule: "30 5,11 * * *" };
+export const config = { schedule: "30 7 * * *" };

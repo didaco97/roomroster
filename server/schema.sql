@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS tokens (hash text PRIMARY KEY, email text NOT NULL, e
 CREATE TABLE IF NOT EXISTS sessions (hash text PRIMARY KEY, email text NOT NULL, expires timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS admin_sessions (hash text PRIMARY KEY, version text NOT NULL, expires timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS admin_codes (email text PRIMARY KEY, hash text NOT NULL, expires timestamptz NOT NULL, attempts integer NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS participant_codes (event text NOT NULL, email text NOT NULL, hash text NOT NULL, expires timestamptz NOT NULL, attempts integer NOT NULL DEFAULT 0, PRIMARY KEY(event,email), FOREIGN KEY(event,email) REFERENCES profiles(event,email) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS digest_jobs (profile uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, slot text NOT NULL, state text NOT NULL DEFAULT 'pending', created timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(profile,slot));
+CREATE INDEX IF NOT EXISTS digest_jobs_pending ON digest_jobs(state,created);
 CREATE TABLE IF NOT EXISTS limits (key text PRIMARY KEY, count integer NOT NULL DEFAULT 1);
 CREATE TABLE IF NOT EXISTS daily_mail (email text NOT NULL, day text NOT NULL, total integer NOT NULL DEFAULT 0, recommendations integer NOT NULL DEFAULT 0, PRIMARY KEY(email,day));
 CREATE TABLE IF NOT EXISTS mail_queue (id uuid PRIMARY KEY, email text NOT NULL, event text NOT NULL REFERENCES events(slug), kind text NOT NULL, data jsonb NOT NULL, dedupe text UNIQUE NOT NULL, state text NOT NULL DEFAULT 'pending', created timestamptz NOT NULL DEFAULT now());

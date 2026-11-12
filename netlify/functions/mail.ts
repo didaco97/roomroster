@@ -12,4 +12,4 @@ export default async function handler() {
   if (!result.ok) throw Error("Mail dispatch failed");
   return new Response("Mail dispatched");
 }
-export const config = { schedule: "*/5 * * * *" };
+export const config = { schedule: "* * * * *" };
