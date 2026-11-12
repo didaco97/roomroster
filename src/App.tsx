@@ -95,17 +95,31 @@ function Modal({
   description,
   children,
   close,
+  focusOnOpen = true,
 }: {
   title: string;
   description: string;
   children: ReactNode;
   close: () => void;
+  focusOnOpen?: boolean;
 }) {
   const opener = useRef(document.activeElement as HTMLElement | null);
   return (
     <Dialog open onOpenChange={(v) => !v && close()}>
       <DialogContent
         className="rr-modal"
+        tabIndex={-1}
+        onOpenAutoFocus={(e) => {
+          // On phones, focusing the first field opens the keyboard over half
+          // the dialog. Keep focus on the dialog itself instead, so people
+          // choose where to tap and focus never lands behind the overlay.
+          if (!focusOnOpen) {
+            e.preventDefault();
+            (e.currentTarget as HTMLElement | null)?.focus({
+              preventScroll: true,
+            });
+          }
+        }}
         onCloseAutoFocus={(e) => {
           e.preventDefault();
           const target = opener.current;
@@ -1308,6 +1322,7 @@ function EventApp() {
           title={pendingLogin ? "One last step." : "Welcome back."}
           description="Sign in with a code sent to your email."
           close={() => setAccess(false)}
+          focusOnOpen={false}
         >
           <ParticipantLogin
             event={slug}
@@ -1967,6 +1982,20 @@ function Organizer({
           accepted connections{!DEMO && <small>Shown in your account</small>}
         </Paper>
       </div>
+      <Button
+        variant="outline"
+        onClick={async () => {
+          const url = `${location.origin}/e/${data.event!.slug}/join`;
+          try {
+            await navigator.clipboard.writeText(url);
+            notify("Join link copied. It opens registration directly.");
+          } catch {
+            notify(`Could not copy. Your join link is ${url}`);
+          }
+        }}
+      >
+        Copy join link
+      </Button>
       <Paper stock="card" className="form-paper">
         <form
           onSubmit={async (ev) => {

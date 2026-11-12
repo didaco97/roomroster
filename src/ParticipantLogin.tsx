@@ -67,6 +67,16 @@ export default function ParticipantLogin({
   }
   return (
     <form onSubmit={submit} className="sign-in-form" aria-busy={busy}>
+      {!verified && (
+        <button
+          type="button"
+          className="text-link sign-in-join"
+          disabled={busy}
+          onClick={onJoin}
+        >
+          New here? Create your profile <span aria-hidden="true">→</span>
+        </button>
+      )}
       <label className="field" htmlFor={id + "email"}>
         Your email
         <Input
@@ -160,16 +170,6 @@ export default function ParticipantLogin({
             Use another email
           </button>
         </div>
-      )}
-      {!verified && (
-        <button
-          type="button"
-          className="text-link sign-in-join"
-          disabled={busy}
-          onClick={onJoin}
-        >
-          New here? Create your profile <span aria-hidden="true">→</span>
-        </button>
       )}
     </form>
   );
