@@ -327,36 +327,35 @@ function Landing() {
   }, []);
   return (
     <div className="shell">
-      <header>
+      <header className="landing-header">
         <Logo />
         <Button asChild variant="outline">
-          <Link to="/create">
-            Create a room <Plus size={16} />
+          <Link to="/create" aria-label="Create a room">
+            New room
           </Link>
         </Button>
       </header>
       <main id="main" tabIndex={-1}>
         <section className="landing-hero">
-          <span className="eyebrow">
-            LESS AWKWARD NETWORKING. MORE GOOD CONNECTIONS.
-          </span>
-          <h1>
-            The best thing in
-            <br />
-            the room?
-            <br />
-            <span className="highlight">The people.</span>
-          </h1>
-          <p>
-            A little directory for your next big gathering. Discover what people
-            are building, find the skills you need, and turn “we should connect”
-            into something real.
-          </p>
-          <Button asChild size="lg">
-            <Link to="/create">
-              Make room for your people <ArrowRight size={18} />
-            </Link>
-          </Button>
+          <div className="landing-copy">
+            <span className="eyebrow">
+              LESS AWKWARD NETWORKING. MORE GOOD CONNECTIONS.
+            </span>
+            <h1>
+              The best thing in the room?
+              <br />
+              <span className="highlight">The people.</span>
+            </h1>
+            <p>
+              Find your event’s people, discover their skills, and turn a hello
+              into something useful.
+            </p>
+            <Button asChild size="lg">
+              <Link to="/create">
+                Make room for your people <ArrowRight size={18} />
+              </Link>
+            </Button>
+          </div>
           <div className="landing-note">
             <Paper stock="card" tape="top" className="note">
               <span className="scribble">

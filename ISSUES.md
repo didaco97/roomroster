@@ -21,7 +21,7 @@ The repository was refreshed from `origin/main` (`04276f3`). No existing `issues
 
 ## Validation
 
-32 backend/unit tests and seven browser suites passed. TypeScript/production build, Workers upload dry run and dependency audit (zero vulnerabilities) passed.
+32 backend/unit tests and nine browser suites passed. TypeScript/production build, Workers upload dry run and dependency audit (zero vulnerabilities) passed.
 
 - [x] PostgreSQL/PGlite tests: attendee/admin code security, restored sessions, failed-delivery recovery, private contacts, event isolation, daily limits, both schedule slots, AI opt-out and a 50-recipient bounded batch.
 - [x] Browser checks: demo flows and a separate production-API path covering code onboarding, photo upload, refresh/back/edit, self-profile protection, failed/retried requests, logout and return login.
@@ -30,3 +30,10 @@ The repository was refreshed from `origin/main` (`04276f3`). No existing `issues
 - [ ] Verify the next two real schedule slots and unsubscribe in the deployed event. Tests use isolated data and mocked SMTP, not actual attendees.
 
 For 50 opted-in recipients, the minute processor needs roughly 25 minutes to drain a slot, excluding provider delays. Schedule time is the start of dispatch. Do not enable Netlify and Workers schedules against the same database simultaneously. See [README.md](README.md) for setup and release instructions.
+
+## Adaptive layout follow-up
+
+- [x] Reproduced homepage cropping at 364px: header CTA exceeded the viewport and the highlighted heading was forced onto one line.
+- [x] Added fluid headline sizing, wrapping highlights/headers/actions, flexible hero columns and event cards; removed absolute positioning from the homepage note.
+- [x] Shortened homepage copy and kept the Looseleaf typography, paper and colors.
+- [x] Added regression checks for visible text/control bounds and document overflow at 320–1440px, including portrait and landscape, plus the public pages and accessibility.

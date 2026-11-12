@@ -105,6 +105,8 @@ hr {
   margin: 30px 0;
 }
 .shell {
+  width: 100%;
+  min-width: 0;
   max-width: 1240px;
   margin: auto;
   padding: 0 42px;
@@ -126,7 +128,9 @@ hr {
 }
 header {
   min-height: 95px;
+  padding-block: 16px;
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
@@ -232,16 +236,15 @@ header {
 .highlight {
   position: relative;
   z-index: 0;
-  white-space: nowrap;
-}
-.highlight:before {
-  content: "";
-  position: absolute;
-  inset: 56% -3% 7%;
-  background: #f7e38a;
-  z-index: -1;
-  transform: rotate(-1.7deg);
-  border-radius: 4% 30% 12% 6%;
+  white-space: normal;
+  background: linear-gradient(
+    transparent 60%,
+    #f7e38a 60%,
+    #f7e38a 91%,
+    transparent 91%
+  );
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 .event-hero {
   display: grid;
@@ -426,6 +429,7 @@ header {
 }
 .section-title {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: end;
   gap: 20px;
@@ -1039,23 +1043,34 @@ summary {
   margin-bottom: 40px;
 }
 .landing-hero {
-  position: relative;
-  padding: 75px 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(32px, 5vw, 64px);
+  padding: clamp(36px, 6vw, 75px) 0;
+}
+.landing-copy {
+  min-width: 0;
 }
 .landing-hero h1 {
-  font-size: 78px;
+  font-size: clamp(2.5rem, calc(1rem + 8vw), 4.875rem);
+  overflow-wrap: anywhere;
 }
-.landing-hero > p {
+.landing-copy > p {
   max-width: 510px;
   margin: 25px 0;
-  font-size: 20px;
+  font-size: clamp(1.0625rem, calc(0.875rem + 0.5vw), 1.25rem);
+}
+.landing-copy > [data-slot="button"] {
+  max-width: 100%;
 }
 .landing-note {
-  position: absolute;
-  right: 40px;
-  top: 140px;
-  width: 290px;
+  width: min(100%, 290px);
+  justify-self: center;
   transform: rotate(5deg);
+}
+.landing-header .logo {
+  white-space: nowrap;
 }
 .note {
   padding: 35px;
@@ -1066,7 +1081,7 @@ summary {
 }
 .event-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
   gap: 25px;
 }
 .event-card {
@@ -1164,15 +1179,14 @@ button[data-slot="dialog-close"] {
   .event-pill {
     display: none;
   }
-  .landing-note {
-    right: 0;
-    width: 230px;
+  .landing-hero {
+    grid-template-columns: minmax(0, 1fr);
   }
   .landing-hero h1 {
-    font-size: 64px;
+    max-width: 12ch;
   }
-  .landing-hero > p {
-    max-width: 440px;
+  .landing-note {
+    width: min(80%, 260px);
   }
   .directory-doodle {
     padding-right: 15px;
@@ -1186,12 +1200,7 @@ button[data-slot="dialog-close"] {
   .gathering-strip > .text-link {
     max-width: 110px;
   }
-  .landing-note {
-    top: 160px;
-  }
-  .landing-hero > p {
-    max-width: 380px;
-  }
+
   .event-ticket .eyebrow {
     font-size: 8px;
   }
@@ -1483,19 +1492,17 @@ button[data-slot="dialog-close"] {
     padding: 20px;
     font-size: 13px;
   }
+  .landing-header .logo {
+    font-size: clamp(22px, 6vw, 26px);
+  }
   .landing-hero {
-    padding: 40px 0;
+    gap: 36px;
   }
   .landing-hero h1 {
-    font-size: 59px;
-  }
-  .landing-hero > p {
-    font-size: 18px;
+    max-width: none;
   }
   .landing-note {
-    position: static;
-    margin: 45px auto 0;
-    width: 260px;
+    margin-block: 12px;
   }
   .event-grid,
   .how {
@@ -1790,4 +1797,29 @@ button[data-slot="dialog-close"] {
   .header-right {
     gap: 8px;
   }
+}
+
+/* Content may grow independently of device presets, browser zoom or orientation. */
+header > *,
+.header-right,
+.section-title > *,
+.event-grid > *,
+.how > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.hero-actions,
+.inline-actions {
+  flex-wrap: wrap;
+}
+[data-slot="button"] {
+  max-width: 100%;
+}
+.event-card .location {
+  display: block;
+}
+.event-card .location svg {
+  display: inline;
+  margin-right: 6px;
+  vertical-align: middle;
 }
