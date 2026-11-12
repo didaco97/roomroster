@@ -620,17 +620,46 @@ function EventApp() {
     ReturnType<typeof rankProfiles>
   >([]);
   const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => {
-    try {
-      setData(await api<Data>("load", { event: slug }));
-      setError("");
-    } catch (e) {
-      setError((e as Error).message);
-      throw e;
-    }
-  }, [slug]);
+  const loadSeq = useRef(0);
+  const load = useCallback(
+    async (silent = false) => {
+      const seq = ++loadSeq.current;
+      try {
+        const d = await api<Data>("load", { event: slug });
+        // A later load (for example after the user's own edit) wins over a
+        // background poll that started earlier but answers later.
+        if (seq !== loadSeq.current) return;
+        setData(d);
+        setError("");
+      } catch (e) {
+        if (!silent) {
+          setError((e as Error).message);
+          throw e;
+        }
+      }
+    },
+    [slug],
+  );
   useEffect(() => {
     load().catch(() => {});
+  }, [load]);
+  // Keep the directory fresh while it is open: background reloads leave the
+  // page, search text and open profile untouched and never surface errors.
+  const pollInFlight = useRef(false);
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden || pollInFlight.current) return;
+      pollInFlight.current = true;
+      load(true).finally(() => {
+        pollInFlight.current = false;
+      });
+    };
+    const t = setInterval(refresh, 30000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", refresh);
+    };
   }, [load]);
   useEffect(() => {
     if (!toast) return;
