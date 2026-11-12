@@ -1,0 +1,463 @@
+diff --git a/canary/fixture-entry.ts b/canary/fixture-entry.ts
+new file mode 100644
+index 0000000..b4107aa
+--- /dev/null
++++ b/canary/fixture-entry.ts
+@@ -0,0 +1,24 @@
++import {rankProfiles,blankProfile,roles} from '../src/domain';
++const fixtures=Array.from({length:50},(_,i)=>({...blankProfile(),id:`fixture-${i}`,event:'fixture-only',name:'N'.repeat(70),startup:'S'.repeat(100),bio:'website agriculture '.repeat(15).slice(0,240),location:'P'.repeat(100),offers:[...roles],needText:'website agriculture '.repeat(40).slice(0,800),offerText:'website frontend developer '.repeat(40).slice(0,800)}));
++const serialized=JSON.stringify(fixtures);
++export default {
++ async fetch(req:Request,env:any){
++  const u=new URL(req.url);
++  if(req.method==='GET')return Response.json({fixtureOnly:true,people:50,bytes:serialized.length,smtp:false,database:false});
++  // Fixed-size, fixture-only UI-triggered canary; deleted after measurement.
++  if(req.method!=='POST'||u.pathname!=='/run-fixture-327613')return new Response('Not found',{status:404});
++  const b:any=await req.json();if(!['round1','round2','round3'].includes(b.round))return new Response('Bad fixture round',{status:400});
++  const created=Date.now();const messages=Array.from({length:50},(_,i)=>({body:{round:b.round,sequence:i,created,fixture:true}}));
++  await env.FIXTURE_QUEUE.sendBatch(messages);return Response.json({queued:50,round:b.round,created});
++ },
++ async queue(batch:any){
++  if(batch.messages.length!==1)throw Error('Canary requires batch1');
++  for(const message of batch.messages){
++   const b=message.body;if(b.fixture!==true||!Number.isInteger(b.sequence)||b.sequence<0||b.sequence>49||!['round1','round2','round3'].includes(b.round)){message.ack();continue;}
++   const roster=JSON.parse(serialized);const person=roster[b.sequence];
++   const matches=rankProfiles(person.needText,roster,person.id).slice(0,3);
++   console.log(JSON.stringify({fixtureCanary:true,round:b.round,sequence:b.sequence,ageMs:Date.now()-b.created,candidates:49,matches:matches.length,bytes:serialized.length,smtp:false,database:false}));
++   message.ack();
++  }
++ }
++};
+diff --git a/capacity/NOTES.md b/capacity/NOTES.md
+new file mode 100644
+index 0000000..5bcbef6
+--- /dev/null
++++ b/capacity/NOTES.md
+@@ -0,0 +1,29 @@
++# Isolated capacity prototype
++
++This is preparation only. These files are archived as an unapplied experiment patch. They are not imported by the deployed Worker or applied to the production database. No schedules, participant writes or real SMTP tests were made by this prototype. Separate model-review attempts are recorded in issue.md.
++
++## What is implemented
++
++- One durable job row with a five-minute exclusive lease.
++- Recipient cursor advances fairly after a complete scan.
++- Candidate pages contain at most 16 people. All candidates at the captured joined-time cutoff are scanned, not only the first page.
++- Only top three suggestions persist between pages; photo/contact/link fields are excluded from candidate query responses.
++- Final queue insertion and job completion are atomic and deduplicated.
++- Scheduled AI mode fails closed before database/SMTP work when a Gemini key is present. No chunked model ranking is substituted.
++- Separate flushOne entry point processes at most one queued message and retains existing quota/failure rules. Candidate availability reads only the proposed IDs.
++
++## Evidence
++
++The final combined suite has 43 passing tests, including 14 bounded-job tests, five snapshot tests and the existing domain/server/matching/SMTP tests. The 1,000-candidate fixture requires 63 invocations, scans all 1,000 candidates, and chooses the strongest candidates from the final page. Maximum observed digest SQL requests per invocation: 7 in this fixture (startup plus completion is structurally at most 8). One match-mail delivery uses 14 SQL calls plus mocked SMTP. Tests cover overlap, expired leases, opt-out/need changes, suggestion/connection exclusions, complete-scan visibility, deterministic ties, fairness, post-cutoff joins, and no automatic retry after ambiguous SMTP failure.
++
++A local Node benchmark of JSON decode, rank, top-three merge and encode on a 16-person page (29,063 input bytes; 1,000 measured samples) gave 0.236 ms p95, 2.334 ms max. This is NOT a complete invocation benchmark or evidence that deployed Workers CPU stays below 10 ms.
++
++## Not ready for production
++
++1. Throughput/window semantics are unresolved. At one candidate page per minute, a full 50-person pass requires about 200 minutes; 100 people require 700 minutes; 1,000 require 63,000 minutes. This excludes mail and cycle overhead. The intended 11 AM/5 PM digest windows need a bounded dispatch design and a roster-size/delivery-window target. Arbitrarily dropping candidates is not an acceptable fix.
++2. Profile edits during a multi-invocation scan can mix versions. The joined-time cutoff excludes later joins, and changed recipient need/opt-out aborts safely, but a stable candidate snapshot or revision/restart protocol is still needed to preserve single-snapshot ranking. This needs additional database/API work.
++3. Production Workers CPU and complete subrequest accounting, including network/TLS overhead and real Neon responses, still need a non-sending canary. Local wall time/Node CPU cannot certify these limits.
++4. Ties are made deterministic by profile ID. The old SQL SELECT order was unspecified. That explicit tie policy should be reviewed as part of production behavior.
++5. This is not wired to Cron. A future rollout needs reviewed migration/indexes, exclusive replacement of the old digest path, safe batch dispatch, metrics, and rollback. No production schema changes or activation are approved by this package.
++
++The prototype demonstrates a bounded algorithm, not production capacity approval.
+diff --git a/capacity/cpu-benchmark.ts b/capacity/cpu-benchmark.ts
+new file mode 100644
+index 0000000..0bb3a87
+--- /dev/null
++++ b/capacity/cpu-benchmark.ts
+@@ -0,0 +1,16 @@
++import {rankProfiles,blankProfile,roles} from '../src/domain';
++import {mergeTop} from '../server/digest-bounded';
++const candidates=Array.from({length:16},(_,i)=>({...blankProfile(),id:String(i),name:'N'.repeat(70),startup:'S'.repeat(100),bio:'website agriculture sales '.repeat(12).slice(0,240),location:'P'.repeat(100),offers:[...roles],offerText:'website frontend developer '.repeat(40).slice(0,800)}));
++const query=[...roles,'website agriculture '.repeat(45).slice(0,800)].join(' ');
++const serialized=JSON.stringify(candidates);
++const durations:number[]=[];
++for(let i=0;i<1100;i++) {
++ const before=process.cpuUsage();
++ const input=JSON.parse(serialized);
++ const ranked=rankProfiles(query,input).map(m=>({id:m.profile.id,name:m.profile.name,reason:m.reason,score:m.score}));
++ const result=JSON.stringify(mergeTop([],ranked));
++ const cpu=process.cpuUsage(before); if(i>=100)durations.push((cpu.user+cpu.system)/1000);
++ if(result.length===0)throw Error('missing result');
++}
++durations.sort((a,b)=>a-b);
++console.log(JSON.stringify({scope:'local Node CPU only: candidate JSON decode, rank, top-3 merge and JSON encode',candidatePage:16,inputBytes:serialized.length,samples:durations.length,p50ms:durations[500],p95ms:durations[950],maxms:durations[999],notProductionWorkersCpuEvidence:true}));
+diff --git a/capacity/schema.sql b/capacity/schema.sql
+new file mode 100644
+index 0000000..c7e8119
+--- /dev/null
++++ b/capacity/schema.sql
+@@ -0,0 +1,9 @@
++-- Isolated prototype only. Not applied to any production database.
++CREATE TABLE IF NOT EXISTS digest_work (
++  id integer PRIMARY KEY CHECK (id=1),
++  last_event text NOT NULL DEFAULT '',
++  last_profile uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
++  job jsonb,
++  lease uuid,
++  lease_until timestamptz
++);
+diff --git a/server/digest-bounded.ts b/server/digest-bounded.ts
+new file mode 100644
+index 0000000..6250ab5
+--- /dev/null
++++ b/server/digest-bounded.ts
+@@ -0,0 +1,60 @@
++// Isolated prototype. Not imported by the production Worker.
++import { randomUUID } from 'node:crypto';
++import { db } from './db';
++import { publicProfile, hash } from './security';
++import { rankProfiles } from '../src/domain';
++
++export const CANDIDATE_PAGE = 16;
++const ZERO = '00000000-0000-0000-0000-000000000000';
++type Suggestion = {id:string;name:string;reason:string;score:number};
++type Job = {profile:string;event:string;email:string;need:string;fingerprint:string;until:string;after:string;top:Suggestion[];scanned:number};
++export function needs(data:any) {
++  return [...(data.needs || []),data.needText || ''].join(' ').trim();
++}
++function fingerprint(p:any) {
++  return hash(JSON.stringify([p.email, p.verified, p.data.alerts, needs(p.data), !!p.data.aiConsent]));
++}
++// Associative top-k reduction: no first-page cutoff, and bounded retained state.
++export function mergeTop(previous:Suggestion[],next:Suggestion[]) {
++  const unique=new Map<string,Suggestion>();
++  for(const item of [...previous,...next]) unique.set(item.id,item);
++  return [...unique.values()].sort((a,b)=>b.score-a.score || a.id.localeCompare(b.id)).slice(0,3);
++}
++export async function boundedDigest() {
++  // Chunking a global model request changes rankings/costs. Never do that silently.
++  if(process.env.GEMINI_API_KEY) return {state:'blocked-ai-mode'};
++  const sql=db(); const lease=randomUUID();
++  await sql`INSERT INTO digest_work(id) VALUES(1) ON CONFLICT DO NOTHING`;
++  const claims=await sql`UPDATE digest_work SET lease=${lease}::uuid,lease_until=now()+interval '5 minutes' WHERE id=1 AND (lease_until IS NULL OR lease_until<now()) RETURNING *`;
++  if(!claims.length) return {state:'busy'};
++  const state=claims[0]; let job:Job|null=state.job;
++  const save=async (job:Job|null,event:string=state.last_event,profile:string=state.last_profile)=>
++    await sql`UPDATE digest_work SET job=${JSON.stringify(job)}::jsonb,last_event=${event},last_profile=${profile}::uuid,lease=NULL,lease_until=NULL WHERE id=1 AND lease=${lease}::uuid RETURNING id`;
++  if(!job) {
++    const rows=await sql`SELECT p.* FROM profiles p JOIN events e ON e.slug=p.event WHERE (p.event,p.id)>(${state.last_event},${state.last_profile}::uuid) AND p.verified AND COALESCE((p.data->>'alerts')::boolean,false) AND (jsonb_array_length(COALESCE(p.data->'needs','[]'::jsonb))>0 OR btrim(COALESCE(p.data->>'needText',''))<>'') AND NOT COALESCE((e.data->>'closed')::boolean,false) AND NOT COALESCE((e.data->>'pending')::boolean,false) AND NOT EXISTS(SELECT 1 FROM mail_queue q WHERE q.email=p.email AND q.event=p.event AND q.kind='match' AND q.state IN ('pending','sending')) ORDER BY p.event,p.id LIMIT 1`;
++    if(!rows.length) {await save(null,'',ZERO);return {state:'cycle-complete'};}
++    const p=rows[0];
++    job={profile:p.id,event:p.event,email:p.email,need:needs(p.data),fingerprint:fingerprint(p),until:new Date().toISOString(),after:ZERO,top:[],scanned:0};
++  }
++  const people=await sql`SELECT p.*,e.data AS event_data FROM profiles p JOIN events e ON e.slug=p.event WHERE p.id=${job.profile}::uuid`;
++  const p=people[0];
++  if(!p || fingerprint(p)!==job.fingerprint || p.event_data.closed || p.event_data.pending) {
++    await save(null,job.event,job.profile);return {state:'recipient-changed'};
++  }
++  const page=await sql`SELECT p.id,p.event,p.joined,p.data-'photo'-'website'-'linkedin'-'email'-'phone' AS data FROM profiles p WHERE p.event=${job.event} AND p.id>${job.after}::uuid AND p.id<>${job.profile}::uuid AND p.joined<=${job.until}::timestamptz AND NOT EXISTS(SELECT 1 FROM match_updates m WHERE m.profile=${job.profile}::uuid AND m.candidate=p.id) AND NOT EXISTS(SELECT 1 FROM connections c WHERE c.event=${job.event} AND ((c.sender=${job.profile}::uuid AND c.recipient=p.id) OR (c.recipient=${job.profile}::uuid AND c.sender=p.id))) ORDER BY p.id LIMIT ${CANDIDATE_PAGE+1}`;
++  const batch=page.slice(0,CANDIDATE_PAGE);
++  const ranked=rankProfiles(job.need,batch.map(publicProfile),job.profile).map(m=>({id:m.profile.id,name:m.profile.name,reason:m.reason,score:m.score}));
++  job.top=mergeTop(job.top,ranked);job.scanned+=batch.length;
++  if(page.length>CANDIDATE_PAGE) {
++    job.after=batch[batch.length-1].id;
++    const saved=await save(job);return {state:saved.length?'scanning':'lost-lease',scanned:job.scanned};
++  }
++  if(!job.top.length) {await save(null,job.event,job.profile);return {state:'no-match',scanned:job.scanned};}
++  const cursor=(await sql`SELECT seen FROM digest_cursor WHERE profile=${job.profile}::uuid`)[0]?.seen || p.joined;
++  const count=Number((await sql`SELECT count(*) AS count FROM profiles WHERE event=${job.event} AND id<>${job.profile}::uuid AND joined>${cursor}::timestamptz AND joined<=${job.until}::timestamptz`)[0].count);
++  const data={profile:job.profile,count,until:job.until,matches:job.top.map(({score,...m})=>m)};
++  const dedupe=`match:${job.profile}:${hash(job.top.map(m=>m.id).sort().join(','))}`;
++  // Atomic completion + queue insert. An expired/stolen lease cannot queue mail.
++  const completed=await sql`WITH done AS (UPDATE digest_work SET job=NULL,last_event=${job.event},last_profile=${job.profile}::uuid,lease=NULL,lease_until=NULL WHERE id=1 AND lease=${lease}::uuid AND lease_until>=now() RETURNING id) INSERT INTO mail_queue(id,email,event,kind,data,dedupe) SELECT ${randomUUID()}::uuid,${job.email},${job.event},'match',${JSON.stringify(data)}::jsonb,${dedupe} FROM done ON CONFLICT(dedupe) DO NOTHING RETURNING id`;
++  return {state:completed.length?'queued':'deduplicated-or-lost-lease',scanned:job.scanned};
++}
+diff --git a/server/digest-snapshot.ts b/server/digest-snapshot.ts
+new file mode 100644
+index 0000000..7dcd227
+--- /dev/null
++++ b/server/digest-snapshot.ts
+@@ -0,0 +1,38 @@
++// Isolated Free Queues feasibility prototype, not imported in production.
++import {randomUUID} from 'node:crypto';
++import {db} from './db';
++import {hash,publicProfile} from './security';
++import {rankProfiles} from '../src/domain';
++import {needs} from './digest-bounded';
++export type PilotJob={run:string;profile:string};
++export async function snapshot(event:string,slot:string) {
++ if(process.env.GEMINI_API_KEY) return {state:'blocked-ai-mode',jobs:[] as PilotJob[]};
++ const sql=db();
++ // Single SQL statement establishes one immutable roster version for the slot.
++ // The stripped JSON has no photos or contact/link fields.
++ const rows=await sql`WITH opened AS (SELECT slug FROM events WHERE slug=${event} AND NOT COALESCE((data->>'closed')::boolean,false) AND NOT COALESCE((data->>'pending')::boolean,false)), run AS (INSERT INTO pilot_digest_runs(id,event,slot,roster) SELECT ${randomUUID()}::uuid,slug,${slot},COALESCE((SELECT jsonb_agg(jsonb_build_object('id',p.id,'event',p.event,'joined',p.joined,'verified',p.verified,'data',p.data-'photo'-'website'-'linkedin'-'email'-'phone') ORDER BY p.id) FROM profiles p WHERE p.event=opened.slug),'[]'::jsonb) FROM opened ON CONFLICT(event,slot) DO UPDATE SET slot=EXCLUDED.slot RETURNING *) INSERT INTO pilot_digest_jobs(run,profile) SELECT run.id,(p->>'id')::uuid FROM run,jsonb_array_elements(run.roster) AS p WHERE (p->>'verified')::boolean AND COALESCE((p->'data'->>'alerts')::boolean,false) AND (jsonb_array_length(COALESCE(p->'data'->'needs','[]'::jsonb))>0 OR btrim(COALESCE(p->'data'->>'needText',''))<>'') ON CONFLICT DO NOTHING`;
++ // Durable outbox IDs: safe to republish after a crash. Consumer is idempotent.
++ const jobs=await sql`SELECT j.run,j.profile FROM pilot_digest_jobs j JOIN pilot_digest_runs r ON r.id=j.run WHERE r.event=${event} AND r.slot=${slot} AND j.state='pending' ORDER BY j.profile`;
++ return {state:'snapshotted',jobs:jobs as PilotJob[]};
++}
++export async function matchSnapshot(job:PilotJob){
++ if(process.env.GEMINI_API_KEY)return {state:'blocked-ai-mode'};
++ const sql=db();
++ const rows=await sql`SELECT r.roster,r.event,r.created,p.email,p.data,p.verified,e.data AS event_data FROM pilot_digest_jobs j JOIN pilot_digest_runs r ON r.id=j.run JOIN profiles p ON p.id=j.profile JOIN events e ON e.slug=r.event WHERE j.run=${job.run}::uuid AND j.profile=${job.profile}::uuid AND j.state='pending'`;
++ if(!rows.length)return {state:'already-completed-or-removed'};
++ const r=rows[0],self=r.roster.find((p:any)=>p.id===job.profile);
++ if(!self || !r.verified || !r.data.alerts || r.event_data.closed || r.event_data.pending || needs(r.data)!==needs(self.data)){
++  await sql`UPDATE pilot_digest_jobs SET state='cancelled' WHERE run=${job.run}::uuid AND profile=${job.profile}::uuid AND state='pending'`;
++  return {state:'recipient-changed'};
++ }
++ const excluded=await sql`SELECT candidate AS id FROM match_updates WHERE profile=${job.profile}::uuid UNION SELECT CASE WHEN sender=${job.profile}::uuid THEN recipient ELSE sender END AS id FROM connections WHERE event=${r.event} AND (sender=${job.profile}::uuid OR recipient=${job.profile}::uuid)`;
++ const exclude=new Set(excluded.map((p:any)=>p.id));exclude.add(job.profile);
++ const candidates=r.roster.filter((p:any)=>!exclude.has(p.id));
++ const matches=rankProfiles(needs(self.data),candidates.map(publicProfile),job.profile).sort((a,b)=>b.score-a.score||a.profile.id.localeCompare(b.profile.id)).slice(0,3);
++ const mailId=randomUUID();const dedupe=`match:${job.profile}:${hash(matches.map(m=>m.profile.id).sort().join(','))}`;
++ // Revalidate the recipient within the completion statement; no email is sent here.
++ // SKIP LOCKED is not needed: row update atomically elects one completion winner.
++ const data={profile:job.profile,count:r.roster.filter((p:any)=>p.id!==job.profile).length,until:new Date(r.created).toISOString(),matches:matches.map(m=>({id:m.profile.id,name:m.profile.name,reason:m.reason}))};
++ const completed=await sql`WITH done AS (UPDATE pilot_digest_jobs SET state=${matches.length?'matched':'no-match'},mail=${matches.length?mailId:null}::uuid WHERE run=${job.run}::uuid AND profile=${job.profile}::uuid AND state='pending' AND EXISTS(SELECT 1 FROM profiles p JOIN events e ON e.slug=p.event WHERE p.id=${job.profile}::uuid AND p.event=${r.event} AND p.verified AND COALESCE((p.data->>'alerts')::boolean,false) AND p.data=${JSON.stringify(r.data)}::jsonb AND NOT COALESCE((e.data->>'closed')::boolean,false) AND NOT COALESCE((e.data->>'pending')::boolean,false)) RETURNING profile) INSERT INTO mail_queue(id,email,event,kind,data,dedupe) SELECT ${mailId}::uuid,${r.email},${r.event},'match',${JSON.stringify(data)}::jsonb,${dedupe} FROM done WHERE ${matches.length}>0 ON CONFLICT(dedupe) DO NOTHING RETURNING id`;
++ return {state:completed.length?'queued':'no-match-or-deduplicated',candidates:candidates.length,ranked:matches.map(m=>m.profile.id)};
++}
+diff --git a/server/mail.ts b/server/mail.ts
+index bac1766..d9d666e 100644
+--- a/server/mail.ts
++++ b/server/mail.ts
+@@ -61,7 +61,7 @@ export async function flush(limit = 12, recipient: string | null = null) {
+         )[0].count,
+       );
+       const available =
+-        await sql`SELECT p.id FROM profiles p WHERE p.event=${m.event} AND NOT EXISTS(SELECT 1 FROM connections c WHERE (c.sender=${recipient.id} AND c.recipient=p.id) OR (c.recipient=${recipient.id} AND c.sender=p.id))`;
++        await sql`SELECT p.id FROM profiles p WHERE p.event=${m.event} AND p.id = ANY(${m.data.matches.map((p:any)=>p.id)}::uuid[]) AND NOT EXISTS(SELECT 1 FROM connections c WHERE (c.sender=${recipient.id} AND c.recipient=p.id) OR (c.recipient=${recipient.id} AND c.sender=p.id))`;
+       m.data.matches = m.data.matches.filter((p: any) =>
+         available.some((a) => a.id === p.id),
+       );
+@@ -156,3 +156,6 @@ export async function flush(limit = 12, recipient: string | null = null) {
+   }
+   return { sent, configured: true };
+         }
++
++// Isolated prototype entry point: one SMTP attempt per queue invocation.
++export async function flushOne() { return flush(1); }
+diff --git a/snapshot/REVIEW.md b/snapshot/REVIEW.md
+new file mode 100644
+index 0000000..46f8ed9
+--- /dev/null
++++ b/snapshot/REVIEW.md
+@@ -0,0 +1,44 @@
++# 50-person, three-round Free pilot feasibility
++
++Preparation only. No production resources, code, schema, participants, email or schedules were changed. The source files are a local proof of selected snapshot/idempotency semantics, not a ready-to-activate mailer.
++
++## Result
++
++An immutable per-event/per-slot PostgreSQL snapshot plus Cloudflare Free Queues is a plausible route to dispatch beginning at 11:00, 17:00 and 21:30 IST without the sequential cursor's 200-minute pacing. Cron is UTC: 05:30/11:30 UTC and 16:00 UTC. Queue scheduling and SMTP cannot guarantee inbox receipt at the exact clock instant.
++
++Local fixtures: snapshot creation and pending-ID selection use 2 SQL requests. Each recipient match uses 3 SQL requests and considers all 49 candidates. Fifty fixture mail rows are created without SMTP. Profile edits after capture do not change snapshot matching; live opt-out/need/event state and connections are checked before queueing. Replay and concurrent completion do not duplicate mail. Candidate photos/contact/link fields are excluded. Five snapshot tests plus fourteen cursor tests and the baseline/domain tests total 43 passing tests; TypeScript passes.
++
++A local decode+49-candidate rank+top-three encode benchmark over an 89,024-byte roster gives p95 0.735ms/max 1.114ms. This excludes database-driver, queue-consumer and mail/TLS work and is NOT production CPU certification.
++
++## Recommended dispatch shape
++
++1. Cron writes an immutable event/slot snapshot and a durable pending-job outbox in one statement. It publishes ID-only queue messages. Replays reuse the slot snapshot. Resume unpublished outbox jobs after partial failure. Outbox publication/recovery implementation remains to be built.
++2. Matching consumer batch size1 loads one recipient plus its complete snapshot candidates, excludes prior suggestions/connections, applies the existing keyword scorer, and creates one deduplicated mail row. No AI key or model call. No silent candidate cap; a larger roster must trigger a measured alternate path, not truncated suggestions.
++3. Separate delivery queue messages reference a specific mail ID. An exact-ID conditional pending->sending claim is required, so redelivery cannot send a different pending mail. Current flushOne is not sufficient for that dispatch identity. Keep pre-send live eligibility/quota/connection revalidation. If the process crashes after sending begins, leave the outcome unknown for review; do not retry ambiguous SMTP.
++4. Start delivery concurrency1 to avoid a burst to Gmail; measure rather than promise latency. Consider matching concurrency separately only after canary evidence. Avoid the default ten-message consumer batch.
++5. Store no recipient data in queue payloads or logs. Expire snapshots once the run is complete and the replay/diagnostic window has closed. A concrete retention rule and cleanup must be reviewed. Never copy production secrets into the canary.
++
++## Estimated normal budget
++
++Three rounds x50 people =150 potential match messages/day. One queue stage costs approximately450 read/write/delete operations/day; two stages approximately900, excluding retries, transactional mail, diagnostics and other account usage. Current Free Queues includes10,000 operations/day with24h retention. Snapshot+matching requests are152 SQL requests/round for50 people; a one-message match delivery previously measured14 SQL calls plus SMTP. Separate stages keep these invocations below50 external requests structurally; redirects/driver internals and CPU still need complete runtime measurement.
++
++Gmail's official personal-account documentation warns of limits above500 messages/day, not a delivery guarantee or an allowance confirmed for this sender.150 match emails plus pilot transactional mail can fit arithmetically, but anti-abuse limits/reputation/rate behavior may stop it earlier. Do not probe capacity by sending to real participants.
++
++## Product-cap decision
++
++Current code allows2 recommendation messages and3 total messages/person/day. A third scheduled clock will be skipped for anyone who already got two match emails. Changing match cap to3 but total cap remaining3 means signup/access/connection mail competes with the third digest, and three digests can exhaust a participant's allowance for access/connection mail later that day.
++
++Earlier options considered (superseded by the approved choice below):
++- Retain all existing caps: three dispatch opportunities, at most2 actual match emails/day, transactional mail shares total3.
++- Permit up to3 match emails but retain total3: possible lost/delayed transactional emails, not recommended for an active pilot.
++- Separate up to3 match emails and up to3 transactional emails/day (overall6), preserving the old per-person transactional ceiling but raising overall volume. This supports the desired third eligible digest without consuming the essential-message allowance, but is a product change needing approval. It does not promise an email when there are no new unsuggested matches or the person opted out.
++
++Approved choice: up to3 new-match messages plus up to3 sign-in/connection messages per person/day, overall6. This approval is not implemented in production or the prototype. A schedule is an opportunity, not an email when there are no new matches.
++
++Need an account-wide sender cap/reserve as well, accounting for all events and manual sender use; it must not be inferred from the pilot's50-person target. No cap was changed in preparation.
++
++## Isolated non-sending canary proposal
++
++Fixture-only disposable Free resources were cleared, but testing stopped for the code handoff before the canary ran. The following remains a proposal: create a disposable Free queue/consumer and fixture-only database tables/project or local-mocked remote API; do not attach the production database or SMTP password. Worker contains no SMTP transport and fails if recipient input is not a fixture identifier. Three50-job bursts and explicit duplicate/crash tests measure queue latency, p95/max CPU, total subrequests, memory, cold start, backlog drain, operations and failure behavior. Instrument public output with aggregate non-secret counters only. Use concurrency1 and batch1 initially; test safe matching concurrency independently. Cleanup queue/consumer/fixture data after evidence is saved. A mock SMTP latency can test dispatch behavior but cannot certify Gmail handoff latency or inbox arrival.
++
++Before any live activation: production-ready outbox/exact-ID sender, reviewed add-only migration/indexes and rollback, no-send canary passing conservatively under10ms/50-request limits, user cap decision, exact participant eligibility/opt-out and content/sender scope, and explicit owner authorization for the intended activation and any test sends. Preserve pilot data and keep Cron empty meanwhile.
+diff --git a/snapshot/schema.sql b/snapshot/schema.sql
+new file mode 100644
+index 0000000..2ba5f9e
+--- /dev/null
++++ b/snapshot/schema.sql
+@@ -0,0 +1,11 @@
++-- LOCAL DESIGN ONLY, not applied to the pilot database.
++CREATE TABLE IF NOT EXISTS pilot_digest_runs (
++ id uuid PRIMARY KEY, event text NOT NULL, slot text NOT NULL,
++ roster jsonb NOT NULL, created timestamptz NOT NULL DEFAULT now(),
++ UNIQUE(event,slot)
++);
++CREATE TABLE IF NOT EXISTS pilot_digest_jobs (
++ run uuid NOT NULL REFERENCES pilot_digest_runs(id), profile uuid NOT NULL,
++ state text NOT NULL DEFAULT 'pending', mail uuid,
++ PRIMARY KEY(run,profile)
++);
+diff --git a/tests/bounded.test.ts b/tests/bounded.test.ts
+new file mode 100644
+index 0000000..6dd4358
+--- /dev/null
++++ b/tests/bounded.test.ts
+@@ -0,0 +1,77 @@
++import {beforeAll,beforeEach,afterAll,it,expect,vi} from 'vitest';
++import {readFile} from 'node:fs/promises';
++import {PGlite} from '@electric-sql/pglite';
++import {eventDefault,blankProfile,rankProfiles} from '../src/domain';
++const state=vi.hoisted(()=>({pg:null as any,queries:0,sent:0,failSmtp:false}));
++vi.mock('../server/db',()=>({db:()=>async(s:TemplateStringsArray,...args:unknown[])=>{state.queries++;let text=s[0];for(let i=0;i<args.length;i++)text+=`$${i+1}`+s[i+1];return(await state.pg.query(text,args)).rows;}}));
++vi.mock('nodemailer',()=>({default:{createTransport:()=>({sendMail:async()=>{state.sent++;if(state.failSmtp)throw Object.assign(Error('fixture failure'),{code:'ETIMEDOUT'});return {accepted:['fixture@example.invalid']};}})}}));
++import {boundedDigest,CANDIDATE_PAGE} from '../server/digest-bounded';
++import {flushOne} from '../server/mail';
++const id=(i:number)=>`00000000-0000-0000-0000-${i.toString(16).padStart(12,'0')}`;
++const event=eventDefault.slug;
++async function person(i:number,recipient=false,offer='website'){
++ const data={...blankProfile(),name:`Fixture ${i}`,bio:'website',offers:[],offerText:offer,needText:recipient?'I need a website':'',alerts:recipient};
++ await state.pg.query('INSERT INTO profiles(id,event,email,verified,data,joined) VALUES($1,$2,$3,true,$4,$5)',[id(i),event,`fixture${i}@example.invalid`,JSON.stringify(data),'2026-01-01T00:00:00Z']);return {id:id(i),...data,event,joined:'2026-01-01T00:00:00Z'};
++}
++async function runToQueue(max=1000){let calls=0,maxQueries=0,last:any;while(calls++<max){state.queries=0;last=await boundedDigest();maxQueries=Math.max(maxQueries,state.queries);if(['queued','no-match','cycle-complete','recipient-changed'].includes(last.state))return {calls,maxQueries,last};}throw Error('did not finish');}
++beforeAll(async()=>{process.env.APP_URL='http://localhost:8888';process.env.SMTP_USER='fixture@example.invalid';process.env.SMTP_PASS='not-real';process.env.SESSION_SECRET='x'.repeat(40);state.pg=new PGlite();await state.pg.exec(await readFile(new URL('../server/schema.sql',import.meta.url),'utf8'));await state.pg.exec(await readFile(new URL('../capacity/schema.sql',import.meta.url),'utf8'));});
++beforeEach(async()=>{delete process.env.GEMINI_API_KEY;state.sent=0;state.queries=0;state.failSmtp=false;await state.pg.exec('TRUNCATE digest_work,events,profiles,connections,tokens,sessions,admin_sessions,admin_codes,limits,daily_mail,mail_queue,match_updates,digest_cursor,search_cache CASCADE');await state.pg.query('INSERT INTO events VALUES($1,$2,$3)',[event,'owner@example.invalid',JSON.stringify(eventDefault)]);});
++afterAll(async()=>{await state.pg.close();});
++it('covers every candidate, including best matches beyond the first 100, with bounded SQL per invocation',async()=>{
++ await person(1,true,'');const candidates=[];
++ for(let i=2;i<=1001;i++)candidates.push(await person(i,false,i<999?'accounting':'website'));
++ // Later candidates offer the requested skill; earlier candidates only mention it in context.
++ await state.pg.query("UPDATE profiles SET data=jsonb_set(data,'{offerText}','\"website frontend developer\"') WHERE id>= $1",[id(999)]);
++ for(const p of candidates)if(p.id>=id(999))p.offerText='website frontend developer';
++ const expected=rankProfiles('I need a website',candidates as any,id(1)).sort((a,b)=>b.score-a.score||a.profile.id.localeCompare(b.profile.id)).slice(0,3).map(m=>m.profile.id);
++ const result=await runToQueue();expect(result.last.scanned).toBe(1000);expect(result.calls).toBe(Math.ceil(1000/CANDIDATE_PAGE));expect(result.maxQueries).toBeLessThanOrEqual(8);
++ const mail=(await state.pg.query('SELECT data FROM mail_queue')).rows[0].data;
++ expect(mail.matches.map((m:any)=>m.id)).toEqual(expected);expect(expected).toEqual([id(999),id(1000),id(1001)]);
++ state.queries=0;await flushOne();const flushQueries=state.queries;expect(state.sent).toBe(1);expect(flushQueries).toBeLessThanOrEqual(14);
++ console.log(JSON.stringify({candidates:1000,invocations:result.calls,maxDigestSql:result.maxQueries,singleMailSql:flushQueries,retainedMatches:mail.matches.length}));
++},30000);
++it('retains only top three and makes no mail visible before the full scan',async()=>{
++ await person(1,true);for(let i=2;i<=40;i++)await person(i);
++ await boundedDigest();const work=(await state.pg.query('SELECT job FROM digest_work')).rows[0].job;expect(work.top).toHaveLength(3);expect(work.scanned).toBe(16);expect((await state.pg.query('SELECT * FROM mail_queue')).rows).toHaveLength(0);
++ await runToQueue();expect((await state.pg.query('SELECT * FROM mail_queue')).rows).toHaveLength(1);
++});
++it('resumes an interrupted page after lease expiry and deduplicates completion',async()=>{
++ await person(1,true);for(let i=2;i<=20;i++)await person(i);
++ await boundedDigest();await state.pg.query("UPDATE digest_work SET lease=$1,lease_until=now()+interval '5 minutes'",[id(5000)]);expect((await boundedDigest()).state).toBe('busy');await state.pg.exec("UPDATE digest_work SET lease_until=now()-interval '1 second'");await runToQueue();await runToQueue();expect((await state.pg.query('SELECT * FROM mail_queue')).rows).toHaveLength(1);
++});
++it('does not queue mail for an opt-out or changed need midway through a scan',async()=>{
++ await person(1,true);for(let i=2;i<=20;i++)await person(i);await boundedDigest();await state.pg.query("UPDATE profiles SET data=jsonb_set(data,'{alerts}','false') WHERE id=$1",[id(1)]);expect((await boundedDigest()).state).toBe('recipient-changed');expect((await state.pg.query('SELECT * FROM mail_queue')).rows).toHaveLength(0);
++});
++it('excludes prior suggestions and connections across page boundaries',async()=>{
++ await person(1,true);for(let i=2;i<=40;i++)await person(i);await state.pg.query('INSERT INTO match_updates VALUES($1,$2)',[id(1),id(2)]);await state.pg.query('INSERT INTO connections(id,event,sender,recipient,status) VALUES($1,$2,$3,$4,$5)',[id(9999),event,id(1),id(3),'accepted']);await runToQueue();const mail=(await state.pg.query('SELECT data FROM mail_queue')).rows[0].data;expect(mail.matches.map((m:any)=>m.id)).toEqual([id(4),id(5),id(6)]);
++});
++it('moves fairly to the next recipient after completion instead of restarting the first',async()=>{
++ await person(1,true);await person(2,true);await person(3);await runToQueue();await runToQueue();expect((await state.pg.query('SELECT email FROM mail_queue ORDER BY email')).rows.map((r:any)=>r.email)).toEqual(['fixture1@example.invalid','fixture2@example.invalid']);
++});
++it('serializes overlapping invocations with a persisted lease',async()=>{
++ await person(1,true);for(let i=2;i<=40;i++)await person(i);const result=await Promise.all([boundedDigest(),boundedDigest()]);expect(result.some(r=>r.state==='busy')).toBe(true);await runToQueue();expect((await state.pg.query('SELECT * FROM mail_queue')).rows).toHaveLength(1);
++});
++it('fails closed for scheduled AI mode before any database or SMTP work',async()=>{process.env.GEMINI_API_KEY='fixture-not-real';state.queries=0;expect(await boundedDigest()).toEqual({state:'blocked-ai-mode'});expect(state.queries).toBe(0);expect(state.sent).toBe(0);});
++it('one-mail flush revalidates opt-out and connections, and never retries ambiguous SMTP failure',async()=>{
++ await person(1,true);await person(2);await runToQueue();state.failSmtp=true;await flushOne();await flushOne();expect(state.sent).toBe(1);expect((await state.pg.query('SELECT state FROM mail_queue')).rows[0].state).toBe('failed');
++});
++it('cancels already queued recommendations after opt-out without SMTP',async()=>{
++ await person(1,true);await person(2);await runToQueue();await state.pg.query("UPDATE profiles SET data=jsonb_set(data,'{alerts}','false') WHERE id=$1",[id(1)]);await flushOne();expect(state.sent).toBe(0);expect((await state.pg.query('SELECT state FROM mail_queue')).rows[0].state).toBe('cancelled');
++});
++it('cancels queued suggestions when all suggested people become connected',async()=>{
++ await person(1,true);await person(2);await runToQueue();await state.pg.query('INSERT INTO connections(id,event,sender,recipient,status) VALUES($1,$2,$3,$4,$5)',[id(9999),event,id(1),id(2),'pending']);await flushOne();expect(state.sent).toBe(0);expect((await state.pg.query('SELECT state FROM mail_queue')).rows[0].state).toBe('cancelled');
++});
++it('discards work when the recipient changes their matching need during a scan',async()=>{
++ await person(1,true);for(let i=2;i<=20;i++)await person(i);await boundedDigest();await state.pg.query("UPDATE profiles SET data=jsonb_set(data,'{needText}','\"I need agronomy\"') WHERE id=$1",[id(1)]);expect((await boundedDigest()).state).toBe('recipient-changed');expect((await state.pg.query('SELECT * FROM mail_queue')).rows).toHaveLength(0);
++});
++it('excludes roster entries joined after the captured scan cutoff',async()=>{
++ await person(1,true);for(let i=2;i<=20;i++)await person(i);await boundedDigest();await person(21);await state.pg.query("UPDATE profiles SET joined=now()+interval '1 day' WHERE id=$1",[id(21)]);const result=await runToQueue();expect(result.last.scanned).toBe(19);
++});
++it('measures a full 50-recipient event without dropping candidate coverage',async()=>{
++ for(let i=1;i<=50;i++)await person(i,true);
++ let invocations=0,maxSql=0,totalSql=0,queued=0;
++ while(invocations<300 && queued<50){state.queries=0;const result=await boundedDigest();invocations++;maxSql=Math.max(maxSql,state.queries);totalSql+=state.queries;if(result.state==='queued')queued++;}
++ expect(queued).toBe(50);expect(invocations).toBe(200);expect(maxSql).toBeLessThanOrEqual(8);
++ const rows=(await state.pg.query('SELECT data FROM mail_queue')).rows;expect(rows).toHaveLength(50);expect(rows.every((r:any)=>r.data.matches.length===3)).toBe(true);
++ expect(state.sent).toBe(0);console.log(JSON.stringify({eligibleRecipients:50,candidatesPerRecipient:49,digestInvocations:invocations,maxDigestSql:maxSql,totalDigestSql:totalSql,queuedFixtureMessages:queued,smtpAttempts:state.sent,atOneInvocationPerMinuteLowerBoundMinutes:invocations}));
++},30000);
+diff --git a/tests/capacity.audit.test.ts b/tests/capacity.audit.test.ts
+new file mode 100644
+index 0000000..b26f0ed
+--- /dev/null
++++ b/tests/capacity.audit.test.ts
+@@ -0,0 +1,26 @@
++import { beforeAll, afterAll, it, expect, vi } from 'vitest';
++import { readFile } from 'node:fs/promises';
++import { PGlite } from '@electric-sql/pglite';
++import { eventDefault, blankProfile } from '../src/domain';
++import { randomUUID } from 'node:crypto';
++const state = vi.hoisted(() => ({ pg: null as any, queries: 0, sent: 0 }));
++vi.mock('../server/db', () => ({ db: () => async (s: TemplateStringsArray, ...args: unknown[]) => {
++  state.queries++; let text=s[0]; for(let i=0;i<args.length;i++) text+=`$${i+1}`+s[i+1];
++  return (await state.pg.query(text,args)).rows;
++}}));
++vi.mock('nodemailer', () => ({ default: { createTransport: () => ({ sendMail: async () => {state.sent++;return {accepted:['fixture@example.invalid']};} }) } }));
++import digest from '../server/digest';
++beforeAll(async () => {
++  process.env.APP_URL='http://localhost:8888'; process.env.SMTP_USER='fixture@example.invalid'; process.env.SMTP_PASS='test-not-real'; process.env.SESSION_SECRET='x'.repeat(40); delete process.env.GEMINI_API_KEY;
++  state.pg=new PGlite(); await state.pg.exec(await readFile(new URL('../server/schema.sql',import.meta.url),'utf8'));
++});
++afterAll(async()=>{await state.pg.close();});
++for(const size of [1,5,25,100]) it(`audits current digest at ${size} eligible recipients`,async()=>{
++  await state.pg.exec('TRUNCATE events,profiles,connections,tokens,sessions,admin_sessions,admin_codes,limits,daily_mail,mail_queue,match_updates,digest_cursor,search_cache CASCADE');
++  await state.pg.query('INSERT INTO events VALUES($1,$2,$3)',[eventDefault.slug,'owner@example.invalid',JSON.stringify(eventDefault)]);
++  for(let i=0;i<size;i++) await state.pg.query('INSERT INTO profiles(id,event,email,verified,data) VALUES($1,$2,$3,true,$4)',[randomUUID(),eventDefault.slug,`fixture${i}@example.invalid`,JSON.stringify({...blankProfile(),name:`Fixture ${i}`,offers:['Web / app developer'],needText:'I need a website',alerts:true})]);
++  state.queries=0;state.sent=0;
++  const start=performance.now(); await digest();
++  console.log(JSON.stringify({recipients:size,sqlSubrequests:state.queries,smtpAttempts:state.sent,isolatedDbAndAppWallMs:Math.round(performance.now()-start)}));
++  if(size>=5) expect(state.queries).toBeGreaterThan(50);
++},30000);
+diff --git a/tests/domain.test.ts b/tests/domain.test.ts
+index 14f5a02..7d9a8f0 100644
+--- a/tests/domain.test.ts
++++ b/tests/domain.test.ts
+@@ -41,3 +41,8 @@ describe("matching and notification rules", () => {
+       "&lt;img src=x onerror=&quot;x&quot;&gt;",
+     ));
+ });
++it('current caps reject a third recommendation and exhausted total quota',()=>{
++ expect(canSend(2,2,'match')).toBe(false);
++ expect(canSend(3,0,'access')).toBe(false);
++ expect(canSend(2,1,'access')).toBe(true);
++});
+diff --git a/tests/snapshot.test.ts b/tests/snapshot.test.ts
+new file mode 100644
+index 0000000..54f1ae9
+--- /dev/null
++++ b/tests/snapshot.test.ts
+@@ -0,0 +1,30 @@
++import {beforeAll,beforeEach,afterAll,it,expect,vi} from 'vitest';
++import {readFile} from 'node:fs/promises';import {PGlite} from '@electric-sql/pglite';
++import {eventDefault,blankProfile} from '../src/domain';
++const state=vi.hoisted(()=>({pg:null as any,queries:0}));
++vi.mock('../server/db',()=>({db:()=>async(s:TemplateStringsArray,...args:unknown[])=>{state.queries++;let text=s[0];for(let i=0;i<args.length;i++)text+=`$${i+1}`+s[i+1];return(await state.pg.query(text,args)).rows;}}));
++import {snapshot,matchSnapshot} from '../server/digest-snapshot';
++const id=(i:number)=>`00000000-0000-0000-0000-${i.toString(16).padStart(12,'0')}`;
++const event=eventDefault.slug;
++async function add(i:number){await state.pg.query('INSERT INTO profiles(id,event,email,verified,data) VALUES($1,$2,$3,true,$4)',[id(i),event,`fixture${i}@example.invalid`,JSON.stringify({...blankProfile(),name:`Fixture${i}`,needText:'website',offerText:'website',alerts:true,photo:'DO_NOT_COPY',email:'DO_NOT_COPY',phone:'DO_NOT_COPY'})]);}
++beforeAll(async()=>{state.pg=new PGlite();await state.pg.exec(await readFile(new URL('../server/schema.sql',import.meta.url),'utf8'));await state.pg.exec(await readFile(new URL('../snapshot/schema.sql',import.meta.url),'utf8'));});
++beforeEach(async()=>{delete process.env.GEMINI_API_KEY;await state.pg.exec('TRUNCATE pilot_digest_runs,pilot_digest_jobs,events,profiles,connections,tokens,sessions,daily_mail,mail_queue,match_updates,digest_cursor CASCADE');await state.pg.query('INSERT INTO events VALUES($1,$2,$3)',[event,'owner@example.invalid',JSON.stringify(eventDefault)]);state.queries=0;});afterAll(async()=>state.pg.close());
++it('creates a50-person immutable full-coverage snapshot with ID-only dispatch and bounded per-recipient SQL',async()=>{
++ for(let i=1;i<=50;i++)await add(i);state.queries=0;const run=await snapshot(event,'2026-11-12T11:00:00+05:30');expect(state.queries).toBe(2);expect(run.jobs).toHaveLength(50);expect(Object.keys(run.jobs[0]).sort()).toEqual(['profile','run']);
++ const stored=(await state.pg.query('SELECT roster FROM pilot_digest_runs')).rows[0].roster;expect(JSON.stringify(stored)).not.toContain('DO_NOT_COPY');
++ let maxSql=0;for(const job of run.jobs){state.queries=0;const result=await matchSnapshot(job);expect(result.candidates).toBe(49);maxSql=Math.max(maxSql,state.queries);}expect(maxSql).toBe(3);expect((await state.pg.query('SELECT * FROM mail_queue')).rows).toHaveLength(50);
++ console.log(JSON.stringify({people:50,snapshotSql:2,recipientMatchSql:maxSql,queuedFixtureMail:50,smtpAttempts:0,normalQueueOpsForThreeDailyRoundsOneStage:450,twoStages:900}));
++});
++it('reuses window snapshot after live edits and retries, with no duplicate job/mail',async()=>{
++ await add(1);await add(2);const run=await snapshot(event,'11am');await state.pg.query("UPDATE profiles SET data=jsonb_set(data,'{offerText}','\"agronomy\"') WHERE id=$1",[id(2)]);await add(3);const retry=await snapshot(event,'11am');expect(retry.jobs).toHaveLength(2);const results=await Promise.all([matchSnapshot(run.jobs[0]),matchSnapshot(run.jobs[0])]);expect(results.filter(r=>r.state==='queued')).toHaveLength(1);expect((await state.pg.query('SELECT data FROM mail_queue')).rows[0].data.matches[0].id).toBe(id(2));
++});
++it('cancels opted-out recipients and honours connections added after snapshot',async()=>{
++ await add(1);await add(2);await add(3);const run=await snapshot(event,'11am');await state.pg.query("UPDATE profiles SET data=jsonb_set(data,'{alerts}','false') WHERE id=$1",[id(1)]);expect((await matchSnapshot(run.jobs[0])).state).toBe('recipient-changed');await state.pg.query('INSERT INTO connections(id,event,sender,recipient) VALUES($1,$2,$3,$4)',[id(99),event,id(2),id(3)]);const result=await matchSnapshot(run.jobs[1]);expect(result.ranked).not.toContain(id(3));
++});
++it('does no DB work in scheduled AI mode',async()=>{process.env.GEMINI_API_KEY='fixture';state.queries=0;expect((await snapshot(event,'11am')).state).toBe('blocked-ai-mode');expect(state.queries).toBe(0);});
++it('distinguishes all three IST slots and keeps replay IDs stable',async()=>{
++ await add(1);await add(2);
++ const slots=['2026-11-12T11:00:00+05:30','2026-11-12T17:00:00+05:30','2026-11-12T21:30:00+05:30'];
++ const runs=[];for(const slot of slots)runs.push(await snapshot(event,slot));
++ expect(new Set(runs.map(r=>r.jobs[0].run)).size).toBe(3);const replay=await snapshot(event,slots[0]);expect(replay.jobs).toEqual(runs[0].jobs);
++});
