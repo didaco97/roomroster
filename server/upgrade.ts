@@ -45,3 +45,16 @@ export function ensureMailNotices() {
       },
     ));
 }
+let pushReady: Promise<unknown> | undefined;
+// Additive: one row per browser/device subscription. Endpoints and keys belong to
+// the subscriber's browser, not to other participants; removed on unsubscribe or
+// when the push service reports them gone.
+export function ensurePushSubscriptions() {
+  return (pushReady ||=
+    db()`CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint text PRIMARY KEY, profile uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, p256dh text NOT NULL, auth text NOT NULL, created timestamptz NOT NULL DEFAULT now())`.catch(
+      (e) => {
+        pushReady = undefined;
+        throw e;
+      },
+    ));
+}

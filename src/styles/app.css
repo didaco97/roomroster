@@ -1839,3 +1839,18 @@ header > *,
   cursor: pointer;
   text-align: left;
 }
+.push-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+.push-notice p {
+  margin: 0;
+}
+.push-notice .notice-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

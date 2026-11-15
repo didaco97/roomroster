@@ -39,12 +39,15 @@
     "@types/nodemailer": "^7.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/web-push": "^3.6.4",
     "@vitejs/plugin-react": "^4.7.0",
+    "http_ece": "^1.2.1",
     "tailwindcss": "^4.1.0",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vite": "^7.0.0",
     "vitest": "^5.1.0",
+    "web-push": "^4.0.0",
     "wrangler": "^4.160.1"
   }
 }

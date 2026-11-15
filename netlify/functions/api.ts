@@ -12,7 +12,11 @@ import {
   escapeHtml as h,
 } from "../../server/security";
 import { queue, flush } from "../../server/mail";
-import { ensureConnectionMessages } from "../../server/upgrade";
+import {
+  ensureConnectionMessages,
+  ensurePushSubscriptions,
+} from "../../server/upgrade";
+import { pushNotify, pushPublicKey } from "../../server/push";
 import { cleanConnectMessage } from "../../src/domain";
 import { match } from "../../server/matching";
 import {
@@ -253,6 +257,42 @@ export default async function handler(req: Request) {
         connections,
         admin: isAdmin,
       });
+    }
+    if (action === "push-key") {
+      const key = pushPublicKey();
+      if (!key) return json({ error: "Notifications are not configured." }, 503);
+      return json({ key });
+    }
+    if (action === "push-subscribe") {
+      if (!mine) return json({ error: "Sign in first." }, 401);
+      const sub = b.subscription;
+      const endpoint = sub?.endpoint;
+      const p256dh = sub?.keys?.p256dh;
+      const auth = sub?.keys?.auth;
+      if (
+        typeof endpoint !== "string" ||
+        !/^https:\/\//.test(endpoint) ||
+        endpoint.length > 1000 ||
+        typeof p256dh !== "string" ||
+        typeof auth !== "string" ||
+        p256dh.length > 200 ||
+        auth.length > 100
+      )
+        return json({ error: "That subscription did not look right." }, 400);
+      await rate(`push-subscribe:${mine.id}`, 30);
+      await ensurePushSubscriptions();
+      // One row per browser endpoint; re-subscribing the same device refreshes its keys.
+      await sql`INSERT INTO push_subscriptions(endpoint,profile,p256dh,auth) VALUES(${endpoint},${mine.id}::uuid,${p256dh},${auth}) ON CONFLICT(endpoint) DO UPDATE SET profile=EXCLUDED.profile,p256dh=EXCLUDED.p256dh,auth=EXCLUDED.auth`;
+      return json({ ok: true });
+    }
+    if (action === "push-unsubscribe") {
+      if (!mine) return json({ error: "Sign in first." }, 401);
+      const endpoint = b.subscription?.endpoint;
+      if (typeof endpoint !== "string" || endpoint.length > 1000)
+        return json({ error: "That subscription did not look right." }, 400);
+      await ensurePushSubscriptions();
+      await sql`DELETE FROM push_subscriptions WHERE endpoint=${endpoint} AND profile=${mine.id}::uuid`;
+      return json({ ok: true });
     }
     if (action === "participant-login") {
       await rate(`participant-verify:${ip}`, 150, 15);
@@ -556,4 +596,6 @@ async function notify(
   } catch (e) {
     console.error("RoomRoster notification failed", kind);
   }
+  if (kind === "connection" || kind === "accepted")
+    await pushNotify(to, event, kind, data as { name: string });
 }

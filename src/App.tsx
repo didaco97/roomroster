@@ -52,6 +52,7 @@ import {
   DialogDescription,
 } from "./components/ui/dialog";
 import { api, DEMO } from "./api";
+import { enablePush, pushPermission, pushSupported } from "./push";
 import Admin from "./Admin";
 import ParticipantLogin from "./ParticipantLogin";
 import {
@@ -605,6 +606,70 @@ function EventRoute() {
   const { slug } = useParams();
   return <EventApp key={slug} />;
 }
+// Offers push notifications once, only to signed-in participants, and only
+// when the browser has not decided yet. Keeps the device's subscription
+// registered silently on later visits.
+function PushNotice({
+  slug,
+  me,
+  notify,
+}: {
+  slug: string;
+  me: { id: string } | null;
+  notify: (message: string) => void;
+}) {
+  const [dismissed, setDismissed] = useState(
+    () => localStorage.getItem("rr-push-dismissed") === "1",
+  );
+  const [asking, setAsking] = useState(false);
+  useEffect(() => {
+    if (!DEMO && me && pushPermission() === "granted")
+      enablePush(slug, false).catch(() => {});
+  }, [me, slug]);
+  if (DEMO || !me || dismissed || !pushSupported() || pushPermission() !== "default")
+    return null;
+  return (
+    <div className="notice push-notice">
+      <p>
+        Get a notification when someone wants to connect or accepts your
+        request.
+      </p>
+      <div className="notice-actions">
+        <Button
+          disabled={asking}
+          onClick={async () => {
+            setAsking(true);
+            const result = await enablePush(slug, true);
+            setAsking(false);
+            if (result === "enabled") {
+              localStorage.setItem("rr-push-dismissed", "1");
+              setDismissed(true);
+              notify("Notifications are on for this device.");
+            } else if (result === "denied") {
+              notify("Notifications are blocked. You can allow them in your browser or app settings.");
+            } else if (result === "unsupported") {
+              setDismissed(true);
+            } else if (result === "failed") {
+              notify("Couldn’t turn on notifications on this device.");
+            }
+          }}
+        >
+          Turn on notifications
+        </Button>
+        <button
+          className="text-link"
+          onClick={() => {
+            localStorage.setItem("rr-push-dismissed", "1");
+            setDismissed(true);
+          }}
+        >
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EventApp() {
   const { slug = "" } = useParams();
   const loc = useLocation();
@@ -856,6 +921,7 @@ function EventApp() {
         {data.admin && <Link to={base + "/organizer"}>Organizer</Link>}
       </nav>
       <main id="main" tabIndex={-1}>
+        <PushNotice slug={slug} me={me ?? null} notify={setToast} />
         {!me && pendingLogin && (
           <div className="notice pending-sign-in">
             <span>Your profile is saved. Sign in to connect or edit.</span>

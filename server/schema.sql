@@ -19,3 +19,4 @@ CREATE TABLE IF NOT EXISTS digest_cursor (profile uuid PRIMARY KEY REFERENCES pr
 CREATE TABLE IF NOT EXISTS search_cache (key text PRIMARY KEY, data jsonb NOT NULL, expires timestamptz NOT NULL);
 CREATE INDEX IF NOT EXISTS profiles_event ON profiles(event);
 CREATE INDEX IF NOT EXISTS queue_pending ON mail_queue(state,created);
+CREATE TABLE IF NOT EXISTS push_subscriptions (endpoint text PRIMARY KEY, profile uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, p256dh text NOT NULL, auth text NOT NULL, created timestamptz NOT NULL DEFAULT now());

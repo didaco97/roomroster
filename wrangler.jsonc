@@ -24,5 +24,6 @@
     "ORGANIZER_EMAIL": "roomroster07@gmail.com",
     "ADMIN_EMAIL": "roomroster07@gmail.com",
     "GEMINI_MODEL": "gemini-2.5-flash",
+    "VAPID_PUBLIC_KEY": "BAnPbJVFL_9QzCuHhcfEDSb7l5lxAcqN20Uun_m22EklusvEB_ur0jBCHpwcLikymYT0K9xH4tXuTFvAXruqN6Y",
   },
 }

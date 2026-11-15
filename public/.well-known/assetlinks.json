@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "me.roomroster.app",
+      "sha256_cert_fingerprints": [
+        "F9:F2:5C:F2:7C:46:8B:F4:14:2B:AC:C5:CF:12:B9:C6:18:02:EA:08:C6:37:88:B1:82:14:6A:1B:2C:F4:CA:C3"
+      ]
+    }
+  }
+]
