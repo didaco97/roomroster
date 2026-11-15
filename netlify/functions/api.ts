@@ -12,6 +12,8 @@ import {
   escapeHtml as h,
 } from "../../server/security";
 import { queue, flush } from "../../server/mail";
+import { ensureConnectionMessages } from "../../server/upgrade";
+import { cleanConnectMessage } from "../../src/domain";
 import { match } from "../../server/matching";
 import {
   consumeParticipantCode,
@@ -231,10 +233,11 @@ export default async function handler(req: Request) {
         )[0]
       : null;
     if (action === "load") {
+      if (mine) await ensureConnectionMessages();
       const rows =
         await sql`SELECT * FROM profiles WHERE event=${event} ORDER BY joined`;
       const connections = mine
-        ? await sql`SELECT c.id,c.event,c.sender AS "from",c.recipient AS "to",c.status,c.created,CASE WHEN c.status='accepted' THEN p.email ELSE NULL END AS email,CASE WHEN c.status='accepted' THEN p.phone ELSE NULL END AS phone FROM connections c JOIN profiles p ON p.id=CASE WHEN c.sender=${mine.id} THEN c.recipient ELSE c.sender END WHERE c.event=${event} AND (c.sender=${mine.id} OR c.recipient=${mine.id})`
+        ? await sql`SELECT c.id,c.event,c.sender AS "from",c.recipient AS "to",c.status,c.created,c.message,CASE WHEN c.status='accepted' THEN p.email ELSE NULL END AS email,CASE WHEN c.status='accepted' THEN p.phone ELSE NULL END AS phone FROM connections c JOIN profiles p ON p.id=CASE WHEN c.sender=${mine.id} THEN c.recipient ELSE c.sender END WHERE c.event=${event} AND (c.sender=${mine.id} OR c.recipient=${mine.id})`
         : [];
       return json({
         event: ev.data,
@@ -412,15 +415,33 @@ export default async function handler(req: Request) {
           { error: "Choose another participant in this event." },
           400,
         );
-      await sql`INSERT INTO connections(id,event,sender,recipient) VALUES(${randomUUID()},${event},${mine.id},${to.id}) ON CONFLICT DO NOTHING RETURNING id`;
-      // Requests are visible immediately; the two scheduled updates include them.
-      return json({ ok: true });
+      const note = cleanConnectMessage(b.message);
+      if (note === null)
+        return json({ error: "Keep your note under 300 characters." }, 400);
+      await ensureConnectionMessages();
+      const id = randomUUID();
+      const created =
+        await sql`INSERT INTO connections(id,event,sender,recipient,message) VALUES(${id},${event},${mine.id},${to.id},${note}) ON CONFLICT DO NOTHING RETURNING id`;
+      // Notify only a verified recipient, once per new request. Delivery problems
+      // never fail the request; mail still counts against the per-person daily cap.
+      if (created.length && to.verified)
+        await notify(
+          to.email,
+          event,
+          "connection",
+          {
+            name: mine.data.name,
+            message: note,
+          },
+          `connection:${id}`,
+        );
+      return json({ ok: true, created: created.length > 0 });
     }
     if (action === "respond") {
       if (typeof b.accept !== "boolean")
         return json({ error: "Choose accept or decline." }, 400);
       const updated =
-        await sql`UPDATE connections SET status=${b.accept ? "accepted" : "declined"} WHERE id=${String(b.id)}::uuid AND recipient=${mine.id} AND event=${event} AND status='pending' RETURNING id`;
+        await sql`UPDATE connections SET status=${b.accept ? "accepted" : "declined"} WHERE id=${String(b.id)}::uuid AND recipient=${mine.id} AND event=${event} AND status='pending' RETURNING id,sender`;
       if (!updated.length)
         return json(
           {
@@ -429,6 +450,22 @@ export default async function handler(req: Request) {
           },
           409,
         );
+      if (b.accept) {
+        const sender = (
+          await sql`SELECT email,verified FROM profiles WHERE id=${updated[0].sender}`
+        )[0];
+        // Declines are never emailed. The email names the person but shares no contact details.
+        if (sender?.verified)
+          await notify(
+            sender.email,
+            event,
+            "accepted",
+            {
+              name: mine.data.name,
+            },
+            `accepted:${updated[0].id}`,
+          );
+      }
       return json({ ok: true });
     }
     return json({ error: "Action not found." }, 404);
@@ -504,4 +541,19 @@ async function link(req: Request, url: URL) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+async function notify(
+  to: string,
+  event: string,
+  kind: string,
+  data: object,
+  dedupe: string,
+) {
+  try {
+    await queue(to, event, kind, data, dedupe);
+    await flush(1, to, dedupe);
+  } catch (e) {
+    console.error("RoomRoster notification failed", kind);
+  }
 }

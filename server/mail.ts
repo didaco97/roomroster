@@ -6,6 +6,28 @@ import { createToken, escapeHtml as h } from "./security";
 import { indiaDay } from "../src/domain";
 import { issueAdminCode, adminEmail } from "./admin";
 import { issueParticipantCode } from "./participant-auth";
+import { ensureMailNotices } from "./upgrade";
+
+// Approved ceiling per person per day: 3 match + 3 essential (sign-in codes,
+// welcome, access links, request and acceptance notices). Notices use at most 2 of the 3
+// essential slots so a sign-in code is never crowded out. Match stays at 2/day
+// until a third round is separately turned on. Sender-wide: a daily cap on the
+// Gmail account, with a reserve that only sign-in codes may use.
+export const MATCH_PER_DAY = 2;
+export const ESSENTIAL_PER_DAY = 3;
+export const NOTICES_PER_DAY = 2;
+export function senderLimits() {
+  const cap = Number(process.env.SENDER_DAILY_CAP) || 300;
+  return { cap, softCap: Math.max(1, cap - Math.min(40, Math.floor(cap / 5))) };
+}
+const SENDER = "*";
+function mailClass(kind: string) {
+  return kind === "match"
+    ? "match"
+    : kind === "connection" || kind === "accepted"
+      ? "notice"
+      : "essential";
+}
 export async function queue(
   email: string,
   event: string,
@@ -32,14 +54,16 @@ export async function flush(
 ) {
   if (!process.env.SMTP_USER || !process.env.SMTP_PASS)
     return { sent: 0, configured: false };
+  await ensureMailNotices();
   const sql = db();
   const transport = nodemailer.createTransport(gmailTransportOptions());
   let sent = 0;
   for (let i = 0; i < limit; i++) {
     const day = indiaDay();
     // Authentication mail has its own request limits; it must never wait behind digests.
+    const lim = senderLimits();
     const claimed =
-      await sql`UPDATE mail_queue SET state='sending' WHERE id=(SELECT q.id FROM mail_queue q WHERE q.state='pending' AND (${recipient}::text IS NULL OR q.email=${recipient}) AND (${dedupe}::text IS NULL OR q.dedupe=${dedupe}) AND (q.kind IN ('admin-code','participant-code') OR NOT EXISTS(SELECT 1 FROM daily_mail d WHERE d.email=q.email AND d.day=${day} AND (d.total>=3 OR (q.kind='match' AND d.recommendations>=2)))) ORDER BY CASE WHEN q.kind IN ('admin-code','participant-code') THEN 0 WHEN q.kind='match' THEN 2 ELSE 1 END,q.created FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`;
+      await sql`UPDATE mail_queue SET state='sending' WHERE id=(SELECT q.id FROM mail_queue q WHERE q.state='pending' AND (${recipient}::text IS NULL OR q.email=${recipient}) AND (${dedupe}::text IS NULL OR q.dedupe=${dedupe}) AND (q.kind IN ('admin-code','participant-code') OR COALESCE((SELECT g.total FROM daily_mail g WHERE g.email=${SENDER} AND g.day=${day}),0)<${lim.softCap}) AND (NOT EXISTS(SELECT 1 FROM daily_mail d WHERE d.email=q.email AND d.day=${day} AND ((q.kind='match' AND d.recommendations>=${MATCH_PER_DAY}) OR (q.kind IN ('connection','accepted') AND (d.notices>=${NOTICES_PER_DAY} OR d.total-d.recommendations>=${ESSENTIAL_PER_DAY})) OR (q.kind<>'match' AND q.kind NOT IN ('connection','accepted') AND d.total-d.recommendations>=${ESSENTIAL_PER_DAY})))) ORDER BY CASE WHEN q.kind IN ('admin-code','participant-code') THEN 0 WHEN q.kind='match' THEN 2 ELSE 1 END,q.created FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *`;
     if (!claimed.length) break;
     const m = claimed[0];
     const auth = m.kind === "admin-code" || m.kind === "participant-code";
@@ -88,10 +112,19 @@ export async function flush(
       )[0];
       Object.assign(m.data, stats);
     }
-    const rec = m.kind === "match" ? 1 : 0;
-    const allowed = auth
-      ? [{ total: 0 }]
-      : await sql`INSERT INTO daily_mail(email,day,total,recommendations) VALUES(${m.email},${day},1,${rec}) ON CONFLICT(email,day) DO UPDATE SET total=daily_mail.total+1,recommendations=daily_mail.recommendations+${rec} WHERE daily_mail.total<3 AND daily_mail.recommendations+${rec}<=2 RETURNING total`;
+    const cls = mailClass(m.kind);
+    const rec = cls === "match" ? 1 : 0;
+    const note = cls === "notice" ? 1 : 0;
+    // Sender-wide budget first (sign-in codes may use the reserve), then the person's.
+    const senderOk =
+      await sql`INSERT INTO daily_mail(email,day,total) VALUES(${SENDER},${day},1) ON CONFLICT(email,day) DO UPDATE SET total=daily_mail.total+1 WHERE daily_mail.total<${auth ? lim.cap : lim.softCap} RETURNING total`;
+    let allowed = senderOk;
+    if (senderOk.length) {
+      allowed =
+        await sql`INSERT INTO daily_mail(email,day,total,recommendations,notices) VALUES(${m.email},${day},1,${rec},${note}) ON CONFLICT(email,day) DO UPDATE SET total=daily_mail.total+1,recommendations=daily_mail.recommendations+${rec},notices=daily_mail.notices+${note} WHERE CASE WHEN ${cls}::text='match' THEN daily_mail.recommendations<${MATCH_PER_DAY} WHEN ${cls}::text='notice' THEN daily_mail.notices<${NOTICES_PER_DAY} AND daily_mail.total-daily_mail.recommendations<${ESSENTIAL_PER_DAY} ELSE daily_mail.total-daily_mail.recommendations<${ESSENTIAL_PER_DAY} END RETURNING total`;
+      if (!allowed.length)
+        await sql`UPDATE daily_mail SET total=total-1 WHERE email=${SENDER} AND day=${day}`;
+    }
     if (!allowed.length) {
       await sql`UPDATE mail_queue SET state='pending' WHERE id=${m.id}`;
       continue;
@@ -143,9 +176,13 @@ export async function flush(
         body = `<p>Confirm your email to create ${h(m.data.name)} and manage its directory.</p>`;
         label = "Confirm & create my event";
       } else if (m.kind === "connection") {
-        title = `A new hello in ${ev.name}`;
-        body = `<p>${h(m.data.name)} would like to connect with you.</p><p>Review their profile and accept if you’d like to share contact details. Nothing is shared until you accept.</p>`;
+        title = `${String(m.data.name || "Someone").slice(0, 80)} wants to connect on ${ev.name}`;
+        body = `<p>${h(m.data.name)} would like to connect with you.</p>${m.data.message ? `<p style="border-left:3px solid #8e8270;padding-left:12px"><em>Their note:</em><br>${h(m.data.message)}</p>` : ""}<p>Review their profile and accept if you’d like to share contact details. Nothing is shared until you accept.</p>`;
         label = "Review connection request";
+      } else if (m.kind === "accepted") {
+        title = `${String(m.data.name || "Someone").slice(0, 80)} accepted your request on ${ev.name}`;
+        body = `<p>${h(m.data.name)} accepted your connection request.</p><p>Open your connections to see the contact details they chose to share.</p>`;
+        label = "Open my connections";
       } else {
         title = `Your update from ${ev.name}`;
         body = `<p><strong>${h(ev.name)}</strong> now has ${Number(m.data.total)} participants.</p><p>Since your last update, <strong>${Number(m.data.count)} new ${Number(m.data.count) === 1 ? "person" : "people"}</strong> joined this event’s directory.</p><p>You have ${Number(m.data.connected)} accepted connections and ${Number(m.data.requests)} pending requests.</p>${m.data.requesters?.length ? `<p>${m.data.requesters.map((name: string) => h(name)).join(", ")} would like to connect. <a href="${h(base + "/connections")}">Review requests</a>.</p>` : ""}${m.data.matches.length ? `<p>A few people who may help with what you need:</p><ul>${m.data.matches.map((p: any) => `<li><a href="${h(base + "/people/" + p.id)}">${h(p.name)}</a> — ${h(p.reason)}</li>`).join("")}</ul>` : "<p>No new matches this time. Explore the room or update what you’re looking for.</p>"}`;

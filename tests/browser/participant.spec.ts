@@ -159,14 +159,15 @@ test("production registration, code sign-in, self profile, reload, edit and requ
     .getByRole("button", { name: "Sam Developer", exact: true })
     .click();
   await page.getByRole("button", { name: "Request to connect" }).click();
+  await page.getByRole("button", { name: "Send request" }).click();
   await expect(
     page.getByRole("button", { name: "Sending request…" }),
   ).toBeDisabled();
   await expect(page.getByRole("alert")).toContainText("Connection unavailable");
   await expect(
-    page.getByRole("button", { name: "Request to connect" }),
+    page.getByRole("button", { name: "Send request" }),
   ).toBeEnabled();
-  await page.getByRole("button", { name: "Request to connect" }).click();
+  await page.getByRole("button", { name: "Send request" }).click();
   await expect(
     page.getByRole("button", { name: "Request recorded" }),
   ).toBeDisabled();

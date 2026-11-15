@@ -42,6 +42,7 @@ vi.mock("nodemailer", () => ({
   },
 }));
 import handler from "../netlify/functions/api";
+import worker from "../worker/index";
 import digest, {
   enqueueDigests,
   processDigests,
@@ -241,7 +242,7 @@ describe("live API against PostgreSQL engine with SMTP mocked", () => {
     ]);
     expect(results.filter(Boolean)).toHaveLength(1);
   });
-  it("delivers requested login codes even after the automatic daily mail cap", async () => {
+  it("delivers requested login codes while an essential slot remains, even after match mail used its share", async () => {
     const p = await register("alice@example.com");
     await state.pg.exec("UPDATE daily_mail SET total=3,recommendations=2");
     const r = await call("participant-request-code", { email: p.email });
@@ -251,8 +252,12 @@ describe("live API against PostgreSQL engine with SMTP mocked", () => {
       (await call("participant-request-code", { email: p.email })).status,
     ).toBe(429);
     expect(
-      (await state.pg.query("SELECT total FROM daily_mail")).rows[0].total,
-    ).toBe(3);
+      (
+        await state.pg.query(
+          "SELECT total FROM daily_mail WHERE email='alice@example.com'",
+        )
+      ).rows[0].total,
+    ).toBe(4);
   });
   it("keeps a profile recoverable when welcome delivery fails", async () => {
     state.failMail = true;
@@ -473,6 +478,308 @@ describe("live API against PostgreSQL engine with SMTP mocked", () => {
     expect(
       (await state.pg.query("SELECT * FROM connections")).rows,
     ).toHaveLength(1);
+  });
+  it("sends a request note and emails the recipient once, then emails the sender only on acceptance", async () => {
+    const a = await register("alice@example.com", "Alice");
+    const b = await register("bob@example.com", "Bob");
+    await state.pg.query("UPDATE profiles SET verified=true");
+    const alice = await session(a.email),
+      bob = await session(b.email);
+    state.sent = [];
+    const long = "x".repeat(301);
+    expect(
+      (await call("connect", { to: b.id, message: long }, alice)).status,
+    ).toBe(400);
+    expect(
+      (await call("connect", { to: b.id, message: 5 }, alice)).status,
+    ).toBe(400);
+    expect(state.sent).toHaveLength(0);
+    const note = "Hi! Can you share your phone number? <b>x</b>";
+    const r = await (
+      await call("connect", { to: b.id, message: note }, alice)
+    ).json();
+    expect(r.created).toBe(true);
+    expect(state.sent).toHaveLength(1);
+    expect(state.sent[0].to).toBe("bob@example.com");
+    expect(state.sent[0].html).toContain("Can you share your phone number?");
+    expect(state.sent[0].html).not.toContain("<b>x</b>");
+    const dup = await (
+      await call("connect", { to: b.id, message: "again" }, alice)
+    ).json();
+    expect(dup.created).toBe(false);
+    expect(state.sent).toHaveLength(1);
+    let data = await (await call("load", {}, bob)).json();
+    expect(data.connections[0].message).toBe(note);
+    expect(data.connections[0].phone).toBeNull();
+    const id = data.connections[0].id;
+    await call("respond", { id, accept: false }, bob);
+    expect(state.sent).toHaveLength(1);
+    await state.pg.query("UPDATE connections SET status='pending'");
+    await call("respond", { id, accept: true }, bob);
+    expect(state.sent).toHaveLength(2);
+    expect(state.sent[1].to).toBe("alice@example.com");
+    expect(state.sent[1].text).not.toContain("bob@example.com");
+    expect(state.sent[1].html).toContain("Bob");
+  });
+  it("does not email unverified recipients, counts mail against the daily cap, and survives SMTP failure", async () => {
+    const a = await register("alice@example.com", "Alice");
+    const b = await register("bob@example.com", "Bob");
+    await state.pg.query(
+      "UPDATE profiles SET verified=true WHERE email='alice@example.com'",
+    );
+    const alice = await session(a.email);
+    state.sent = [];
+    expect((await call("connect", { to: b.id }, alice)).status).toBe(200);
+    expect(state.sent).toHaveLength(0);
+    await state.pg.exec(
+      "DELETE FROM connections; UPDATE profiles SET verified=true",
+    );
+    state.failMail = true;
+    expect(
+      (await call("connect", { to: b.id, message: "hi" }, alice)).status,
+    ).toBe(200);
+    expect(
+      (await state.pg.query("SELECT * FROM connections")).rows,
+    ).toHaveLength(1);
+    state.failMail = false;
+    await state.pg.query("DELETE FROM connections");
+    await state.pg.query(
+      "INSERT INTO daily_mail(email,day,total,recommendations) VALUES('bob@example.com',$1,3,0) ON CONFLICT(email,day) DO UPDATE SET total=3",
+      [(await import("../src/domain")).indiaDay()],
+    );
+    state.sent = [];
+    await call("connect", { to: b.id }, alice);
+    expect(state.sent).toHaveLength(0);
+    expect(
+      (
+        await state.pg.query(
+          "SELECT state FROM mail_queue WHERE kind='connection' ORDER BY created DESC",
+        )
+      ).rows[0].state,
+    ).toBe("pending");
+  });
+  it("keeps cap-held request and acceptance emails pending through digest enqueue, then sends them once under the cap", async () => {
+    const a = await register("alice@example.com", "Alice");
+    const b = await register("bob@example.com", "Bob");
+    await state.pg.query("UPDATE profiles SET verified=true");
+    const alice = await session(a.email),
+      bob = await session(b.email);
+    const day = (await import("../src/domain")).indiaDay();
+    await state.pg.query(
+      "INSERT INTO daily_mail(email,day,total,recommendations) VALUES('bob@example.com',$1,3,0),('alice@example.com',$1,3,0) ON CONFLICT(email,day) DO UPDATE SET total=3",
+      [day],
+    );
+    state.sent = [];
+    await call("connect", { to: b.id, message: "hello" }, alice);
+    const id = (await state.pg.query("SELECT id FROM connections")).rows[0].id;
+    await call("respond", { id, accept: true }, bob);
+    const held = () =>
+      state.pg.query(
+        "SELECT kind,state FROM mail_queue WHERE kind IN ('connection','accepted') ORDER BY kind",
+      );
+    expect((await held()).rows).toEqual([
+      { kind: "accepted", state: "pending" },
+      { kind: "connection", state: "pending" },
+    ]);
+    await enqueueDigests();
+    expect((await held()).rows.map((r: any) => r.state)).toEqual([
+      "pending",
+      "pending",
+    ]);
+    expect(state.sent).toHaveLength(0);
+    await state.pg.exec("DELETE FROM daily_mail");
+    await flush(5);
+    await flush(5);
+    expect(
+      state.sent.filter((m) =>
+        /wants to connect|accepted your/.test(m.subject),
+      ),
+    ).toHaveLength(2);
+    expect((await held()).rows.map((r: any) => r.state)).toEqual([
+      "sent",
+      "sent",
+    ]);
+  });
+  it("limits request/acceptance notices to 2 a day per person, leaves a slot for sign-in, and delivers the held one after the day rolls over", async () => {
+    const day = (await import("../src/domain")).indiaDay();
+    const dee = await register("dee@example.com", "Dee");
+    const senders = [] as any[];
+    for (const n of ["a", "b", "c"])
+      senders.push(await register(`${n}@example.com`, n.toUpperCase()));
+    await state.pg.exec("UPDATE profiles SET verified=true");
+    await state.pg.exec("DELETE FROM daily_mail");
+    state.sent = [];
+    for (const p of senders)
+      await call(
+        "connect",
+        { to: dee.id, message: "hi" },
+        await session(p.email),
+      );
+    const notices = () =>
+      state.sent.filter((m) => /wants to connect/.test(m.subject));
+    expect(notices()).toHaveLength(2);
+    const q = () =>
+      state.pg.query(
+        "SELECT state,count(*)::int c FROM mail_queue WHERE kind='connection' GROUP BY state ORDER BY state",
+      );
+    expect((await q()).rows).toEqual([
+      { state: "pending", c: 1 },
+      { state: "sent", c: 2 },
+    ]);
+    // A sign-in code still gets the third essential slot.
+    state.sent = [];
+    expect(
+      (await call("participant-request-code", { email: dee.email })).status,
+    ).toBe(200);
+    expect(state.sent).toHaveLength(1);
+    // Cron ticks the same day change nothing: no duplicates, still held.
+    await worker.scheduled({ cron: "* * * * *" });
+    await worker.scheduled({ cron: "* * * * *" });
+    expect(notices()).toHaveLength(0);
+    // Midnight rollover (yesterday's counters no longer apply).
+    await state.pg.query("UPDATE daily_mail SET day='2000-01-01'");
+    state.sent = [];
+    await worker.scheduled({ cron: "* * * * *" });
+    await worker.scheduled({ cron: "* * * * *" });
+    expect(notices()).toHaveLength(1);
+    expect((await q()).rows).toEqual([{ state: "sent", c: 3 }]);
+    const per = (
+      await state.pg.query(
+        "SELECT total,notices FROM daily_mail WHERE email='dee@example.com' AND day=$1",
+        [day],
+      )
+    ).rows[0];
+    expect(per).toEqual({ total: 1, notices: 1 });
+  });
+  it("applies a sender-wide daily cap with a reserve that only sign-in codes can use", async () => {
+    process.env.SENDER_DAILY_CAP = "10";
+    try {
+      const a = await register("alice@example.com", "Alice");
+      const b = await register("bob@example.com", "Bob");
+      await state.pg.exec("UPDATE profiles SET verified=true");
+      const alice = await session(a.email);
+      const day = (await import("../src/domain")).indiaDay();
+      await state.pg.exec("DELETE FROM daily_mail");
+      await state.pg.query(
+        "INSERT INTO daily_mail(email,day,total) VALUES('*',$1,8)",
+        [day],
+      );
+      state.sent = [];
+      await call("connect", { to: b.id }, alice);
+      expect(state.sent).toHaveLength(0);
+      expect(
+        (
+          await state.pg.query(
+            "SELECT state FROM mail_queue WHERE kind='connection'",
+          )
+        ).rows[0].state,
+      ).toBe("pending");
+      expect(
+        (await call("participant-request-code", { email: b.email })).status,
+      ).toBe(200);
+      expect(state.sent).toHaveLength(1);
+      expect(
+        (
+          await state.pg.query(
+            "SELECT total FROM daily_mail WHERE email='*' AND day=$1",
+            [day],
+          )
+        ).rows[0].total,
+      ).toBe(9);
+    } finally {
+      delete process.env.SENDER_DAILY_CAP;
+    }
+  });
+  it("never retries an SMTP failure automatically, and a failed send keeps its reservation", async () => {
+    const a = await register("alice@example.com", "Alice");
+    const b = await register("bob@example.com", "Bob");
+    await state.pg.exec("UPDATE profiles SET verified=true");
+    const alice = await session(a.email);
+    const day = (await import("../src/domain")).indiaDay();
+    state.sent = [];
+    state.failMail = true;
+    await call("connect", { to: b.id, message: "hi" }, alice);
+    state.failMail = false;
+    await worker.scheduled({ cron: "* * * * *" });
+    await flush(5);
+    expect(state.sent).toHaveLength(0);
+    const row = (
+      await state.pg.query(
+        "SELECT state FROM mail_queue WHERE kind='connection'",
+      )
+    ).rows;
+    expect(row).toEqual([{ state: "failed" }]);
+    expect(
+      (
+        await state.pg.query(
+          "SELECT notices FROM daily_mail WHERE email='bob@example.com' AND day=$1",
+          [day],
+        )
+      ).rows[0].notices,
+    ).toBe(1);
+  });
+  it("serializes counters under simultaneous flushes and serves due notices before match mail", async () => {
+    const a = await register("alice@example.com", "Alice");
+    const b = await register("bob@example.com", "Bob");
+    await state.pg.exec("UPDATE profiles SET verified=true");
+    await state.pg.exec("DELETE FROM daily_mail");
+    state.sent = [];
+    for (let i = 0; i < 4; i++) {
+      await queue(
+        "bob@example.com",
+        event,
+        "match",
+        { profile: b.id, matches: [] },
+        "m" + i,
+      );
+    }
+    await queue(
+      "bob@example.com",
+      event,
+      "connection",
+      { name: "A", message: "" },
+      "n1",
+    );
+    await queue(
+      "bob@example.com",
+      event,
+      "connection",
+      { name: "B", message: "" },
+      "n2",
+    );
+    await queue(
+      "bob@example.com",
+      event,
+      "connection",
+      { name: "C", message: "" },
+      "n3",
+    );
+    await queue("bob@example.com", event, "participant-code", {}, "c1");
+    await queue("bob@example.com", event, "participant-code", {}, "c2");
+    // One send first: a due notice or code, never a match mail.
+    await flush(1, "bob@example.com");
+    expect(state.sent[0].subject).not.toMatch(/Your update/);
+    await Promise.all([1, 2, 3, 4].map(() => flush(3, "bob@example.com")));
+    const row = (
+      await state.pg.query(
+        "SELECT total,recommendations,notices FROM daily_mail WHERE email='bob@example.com'",
+      )
+    ).rows[0];
+    expect(row.total - row.recommendations).toBeLessThanOrEqual(3);
+    expect(row.notices).toBeLessThanOrEqual(2);
+    expect(row.recommendations).toBeLessThanOrEqual(2);
+    expect(state.sent).toHaveLength(row.total);
+    expect(
+      (await state.pg.query("SELECT total FROM daily_mail WHERE email='*'"))
+        .rows[0].total,
+    ).toBe(row.total);
+    const states = (
+      await state.pg.query(
+        "SELECT state,count(*)::int c FROM mail_queue WHERE email='bob@example.com' GROUP BY state",
+      )
+    ).rows;
+    expect(states.find((r: any) => r.state === "sending")).toBeUndefined();
+    void a;
   });
   it("rejects cross-event connection requests and unprivileged organizer operations", async () => {
     const a = await register("alice@example.com");

@@ -23,3 +23,25 @@ export function ensureDigestJobs() {
       },
     ));
 }
+let messagesReady: Promise<unknown> | undefined;
+// Additive: nullable note on a connection request. Existing rows are untouched.
+export function ensureConnectionMessages() {
+  return (messagesReady ||=
+    db()`ALTER TABLE connections ADD COLUMN IF NOT EXISTS message text`.catch(
+      (e) => {
+        messagesReady = undefined;
+        throw e;
+      },
+    ));
+}
+let noticesReady: Promise<unknown> | undefined;
+// Additive: per-person count of request/acceptance notices sent today.
+export function ensureMailNotices() {
+  return (noticesReady ||=
+    db()`ALTER TABLE daily_mail ADD COLUMN IF NOT EXISTS notices integer NOT NULL DEFAULT 0`.catch(
+      (e) => {
+        noticesReady = undefined;
+        throw e;
+      },
+    ));
+}

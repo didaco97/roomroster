@@ -17,7 +17,7 @@ export async function enqueueDigests(slot = digestSlot()) {
   await ensureDigestJobs();
   const sql = db();
   await sql`WITH expired_sessions AS (DELETE FROM sessions WHERE expires<now()), expired_tokens AS (DELETE FROM tokens WHERE expires<now()) DELETE FROM search_cache WHERE expires<now()`;
-  await sql`UPDATE mail_queue SET state='cancelled' WHERE kind='connection' AND state='pending'`;
+  // Request and acceptance emails held back by the daily cap stay pending and send later.
   await sql`INSERT INTO digest_jobs(profile,slot) SELECT p.id,${slot} FROM profiles p JOIN events e ON e.slug=p.event WHERE p.verified AND COALESCE((p.data->>'alerts')::boolean,false) AND NOT COALESCE((e.data->>'closed')::boolean,false) AND NOT COALESCE((e.data->>'pending')::boolean,false) ON CONFLICT DO NOTHING`;
 }
 export async function processDigests(limit = 2) {

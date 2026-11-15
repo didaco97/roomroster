@@ -147,6 +147,7 @@ export async function api<T = any>(
           to: body.to,
           status: "pending",
           created: new Date().toISOString(),
+          message: String(body.message || "").slice(0, 300),
         });
       result = { ok: true };
       break;

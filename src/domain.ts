@@ -61,6 +61,7 @@ export type Connection = {
   to: string;
   status: "pending" | "accepted" | "declined";
   created: string;
+  message?: string | null;
   name?: string;
   email?: string;
   phone?: string;
@@ -187,4 +188,20 @@ export function initials(name: string) {
     .map((n) => n[0])
     .join("")
     .toUpperCase();
+}
+
+export const CONNECT_NOTE_MAX = 300;
+export const CONNECT_PRESETS = [
+  "Hi! Can you share your phone number?",
+  "I'd like to stay in touch after the event.",
+  "I think we can help each other. Can we talk?",
+  "Can you share your LinkedIn or email?",
+  "Great meeting you. Let's connect!",
+];
+// null = too long (reject); "" = no note. Strips control characters.
+export function cleanConnectMessage(v: unknown): string | null {
+  if (v == null) return "";
+  if (typeof v !== "string") return null;
+  const t = v.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "").trim();
+  return t.length > CONNECT_NOTE_MAX ? null : t;
 }

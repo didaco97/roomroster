@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS events (slug text PRIMARY KEY, owner text NOT NULL, data jsonb NOT NULL);
 CREATE TABLE IF NOT EXISTS profiles (id uuid PRIMARY KEY, event text NOT NULL REFERENCES events(slug), email text NOT NULL, phone text NOT NULL DEFAULT '', verified boolean NOT NULL DEFAULT false, data jsonb NOT NULL, joined timestamptz NOT NULL DEFAULT now(), UNIQUE(event,email));
-CREATE TABLE IF NOT EXISTS connections (id uuid PRIMARY KEY, event text NOT NULL REFERENCES events(slug), sender uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, recipient uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','declined')), created timestamptz NOT NULL DEFAULT now(), CHECK(sender<>recipient));
+CREATE TABLE IF NOT EXISTS connections (id uuid PRIMARY KEY, event text NOT NULL REFERENCES events(slug), sender uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, recipient uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, status text NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','declined')), created timestamptz NOT NULL DEFAULT now(), message text, CHECK(sender<>recipient));
+ALTER TABLE connections ADD COLUMN IF NOT EXISTS message text;
 CREATE UNIQUE INDEX IF NOT EXISTS connection_pair ON connections(event,least(sender,recipient),greatest(sender,recipient));
 CREATE TABLE IF NOT EXISTS tokens (hash text PRIMARY KEY, email text NOT NULL, event text NOT NULL, kind text NOT NULL, data jsonb NOT NULL DEFAULT '{}', expires timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (hash text PRIMARY KEY, email text NOT NULL, expires timestamptz NOT NULL);
@@ -10,7 +11,8 @@ CREATE TABLE IF NOT EXISTS participant_codes (event text NOT NULL, email text NO
 CREATE TABLE IF NOT EXISTS digest_jobs (profile uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, slot text NOT NULL, state text NOT NULL DEFAULT 'pending', created timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(profile,slot));
 CREATE INDEX IF NOT EXISTS digest_jobs_pending ON digest_jobs(state,created);
 CREATE TABLE IF NOT EXISTS limits (key text PRIMARY KEY, count integer NOT NULL DEFAULT 1);
-CREATE TABLE IF NOT EXISTS daily_mail (email text NOT NULL, day text NOT NULL, total integer NOT NULL DEFAULT 0, recommendations integer NOT NULL DEFAULT 0, PRIMARY KEY(email,day));
+CREATE TABLE IF NOT EXISTS daily_mail (email text NOT NULL, day text NOT NULL, total integer NOT NULL DEFAULT 0, recommendations integer NOT NULL DEFAULT 0, notices integer NOT NULL DEFAULT 0, PRIMARY KEY(email,day));
+ALTER TABLE daily_mail ADD COLUMN IF NOT EXISTS notices integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS mail_queue (id uuid PRIMARY KEY, email text NOT NULL, event text NOT NULL REFERENCES events(slug), kind text NOT NULL, data jsonb NOT NULL, dedupe text UNIQUE NOT NULL, state text NOT NULL DEFAULT 'pending', created timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS match_updates (profile uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, candidate uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, PRIMARY KEY(profile,candidate));
 CREATE TABLE IF NOT EXISTS digest_cursor (profile uuid PRIMARY KEY REFERENCES profiles(id) ON DELETE CASCADE, seen timestamptz NOT NULL);

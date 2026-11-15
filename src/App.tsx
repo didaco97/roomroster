@@ -64,6 +64,8 @@ import {
   type Profile,
   type EventInfo,
   type Connection,
+  CONNECT_PRESETS,
+  CONNECT_NOTE_MAX,
 } from "./domain";
 
 type Data = {
@@ -634,6 +636,8 @@ function EventApp() {
     ReturnType<typeof rankProfiles>
   >([]);
   const [busy, setBusy] = useState(false);
+  const [composing, setComposing] = useState(false);
+  const [note, setNote] = useState("");
   const loadSeq = useRef(0);
   const load = useCallback(
     async (silent = false) => {
@@ -724,6 +728,15 @@ function EventApp() {
       active = false;
     };
   }, [recommend, data, onboarded, slug]);
+  const noteBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setComposing(false);
+    setNote("");
+  }, [selected?.id]);
+  useEffect(() => {
+    // On phones the popup scrolls: bring the note and send button into view.
+    if (composing) noteBox.current?.scrollIntoView?.({ block: "end" });
+  }, [composing]);
   if (!data)
     return (
       <main id="main" className="standalone">
@@ -774,12 +787,18 @@ function EventApp() {
       select(undefined);
       return;
     }
-    if (await action("connect", { to: p.id }))
+    const r = await action("connect", { to: p.id, message: note.trim() });
+    if (r) {
+      setComposing(false);
+      setNote("");
       setToast(
         DEMO
           ? "Request saved in preview. No email was sent."
-          : "Request sent. They can accept in their connections.",
+          : r.created === false
+            ? "A request with this person already exists."
+            : "Request sent. They'll get an email and can accept in their connections.",
       );
+    }
   }
   return (
     <div className="shell">
@@ -1087,6 +1106,14 @@ function EventApp() {
                               ? "You’re connected. Say hello!"
                               : "Request declined."}
                         </p>
+                        {c.message && (
+                          <p>
+                            <em>
+                              {c.to === me.id ? "Their note" : "Your note"}:
+                            </em>{" "}
+                            {c.message}
+                          </p>
+                        )}
                         {c.status === "accepted" && (
                           <p>
                             {c.email ? (
@@ -1228,6 +1255,42 @@ function EventApp() {
               {actionError}
             </p>
           )}
+          {selected.id !== me?.id &&
+            composing &&
+            !data.connections.find((c) =>
+              [c.from, c.to].includes(selected.id),
+            ) && (
+              <div className="connect-note">
+                <label htmlFor="connect-note">Add a note (optional)</label>
+                <div
+                  className="inline-actions"
+                  role="group"
+                  aria-label="Quick messages"
+                >
+                  {CONNECT_PRESETS.map((t) => (
+                    <button
+                      type="button"
+                      key={t}
+                      className="tag"
+                      onClick={() => setNote(t)}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <Textarea
+                  id="connect-note"
+                  maxLength={CONNECT_NOTE_MAX}
+                  placeholder="Why do you want to connect? You can also ask for a phone number."
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
+                <small>
+                  {note.length}/{CONNECT_NOTE_MAX}. They see this note. Your
+                  contact details stay private unless they accept.
+                </small>
+              </div>
+            )}
           {selected.id !== me?.id && (
             <Button
               disabled={
@@ -1236,7 +1299,9 @@ function EventApp() {
                   [c.from, c.to].includes(selected.id),
                 )
               }
-              onClick={() => connect(selected)}
+              onClick={() =>
+                composing ? connect(selected) : setComposing(true)
+              }
             >
               {busy ? (
                 <LoaderCircle className="loading-spin" size={17} />
@@ -1245,15 +1310,17 @@ function EventApp() {
               )}
               {busy
                 ? "Sending request…"
-                : data.connections.find((c) =>
-                      [c.from, c.to].includes(selected.id),
-                    )?.status === "accepted"
-                  ? "Connected"
+                : composing
+                  ? "Send request"
                   : data.connections.find((c) =>
                         [c.from, c.to].includes(selected.id),
-                      )
-                    ? "Request recorded"
-                    : "Request to connect"}
+                      )?.status === "accepted"
+                    ? "Connected"
+                    : data.connections.find((c) =>
+                          [c.from, c.to].includes(selected.id),
+                        )
+                      ? "Request recorded"
+                      : "Request to connect"}
             </Button>
           )}
           {selected.id === me?.id ? (
@@ -1268,6 +1335,7 @@ function EventApp() {
           ) : (
             <small>Contact details are shared only after acceptance.</small>
           )}
+          <div ref={noteBox} aria-hidden="true" />
         </Modal>
       )}
       {recommend && (

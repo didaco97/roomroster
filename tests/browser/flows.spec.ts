@@ -64,8 +64,23 @@ test("onboarding, recommendations, search, request and profile editing", async (
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByRole("dialog").getByText("Rohan Mehta")).toBeVisible();
   await page.getByRole("button", { name: "Explore the directory" }).click();
+  await page.setViewportSize({ width: 375, height: 667 });
   await page.getByRole("button", { name: /Rohan Mehta/ }).click();
   await page.getByRole("button", { name: "Request to connect" }).click();
+  await page
+    .getByRole("button", { name: "Can you share your phone number?" })
+    .click();
+  await page.waitForTimeout(700);
+  const box = page.getByRole("textbox", { name: /Add a note/ });
+  await expect(box).toHaveValue(/phone number/);
+  for (const el of [box, page.getByRole("button", { name: "Send request" })]) {
+    const r = (await el.boundingBox())!;
+    const vh = page.viewportSize()!.height;
+    expect(r.y).toBeGreaterThanOrEqual(0);
+    expect(r.y + r.height).toBeLessThanOrEqual(vh);
+  }
+  await page.screenshot({ path: "test-results/connect-note.png" });
+  await page.getByRole("button", { name: "Send request" }).click();
   await expect(
     page.getByRole("button", { name: "Request recorded" }),
   ).toBeDisabled();

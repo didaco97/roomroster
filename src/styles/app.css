@@ -933,8 +933,10 @@ summary {
   width: calc(100vw - 32px) !important;
   padding: 30px !important;
   margin: auto !important;
-  max-height: calc(100dvh - 40px);
-  overflow-y: auto;
+  /* The dialog frame scrolls, so the paper background grows with the content. */
+  max-height: none !important;
+  overflow: visible !important;
+  flex-shrink: 0;
   display: flex !important;
   flex-direction: column;
   gap: 18px;
@@ -1469,7 +1471,6 @@ button[data-slot="dialog-close"] {
   }
   .rr-modal {
     padding: 26px 20px !important;
-    max-height: calc(100dvh - 30px);
     width: calc(100vw - 24px) !important;
   }
   .rr-modal [data-slot="dialog-title"] {
@@ -1828,4 +1829,13 @@ header > *,
   display: inline;
   margin-right: 6px;
   vertical-align: middle;
+}
+
+.connect-note {
+  display: grid;
+  gap: 10px;
+}
+.connect-note .tag {
+  cursor: pointer;
+  text-align: left;
 }
