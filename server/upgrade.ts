@@ -58,3 +58,17 @@ export function ensurePushSubscriptions() {
       },
     ));
 }
+
+let fcmReady: Promise<unknown> | undefined;
+
+// Native Android FCM tokens: one row per device token, written by the
+// signed-in app; removed on unsubscribe or when FCM reports them gone.
+export function ensureFcmTokens() {
+  return (fcmReady ||=
+    db()`CREATE TABLE IF NOT EXISTS fcm_tokens (token text PRIMARY KEY, profile uuid NOT NULL REFERENCES profiles(id) ON DELETE CASCADE, created timestamptz NOT NULL DEFAULT now())`.catch(
+      (e) => {
+        fcmReady = undefined;
+        throw e;
+      },
+    ));
+}

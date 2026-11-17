@@ -17,6 +17,8 @@ import {
   ensurePushSubscriptions,
 } from "../../server/upgrade";
 import { pushNotify, pushPublicKey } from "../../server/push";
+import { fcmNotify } from "../../server/fcm";
+import { ensureFcmTokens } from "../../server/upgrade";
 import { cleanConnectMessage } from "../../src/domain";
 import { match } from "../../server/matching";
 import {
@@ -283,6 +285,25 @@ export default async function handler(req: Request) {
       await ensurePushSubscriptions();
       // One row per browser endpoint; re-subscribing the same device refreshes its keys.
       await sql`INSERT INTO push_subscriptions(endpoint,profile,p256dh,auth) VALUES(${endpoint},${mine.id}::uuid,${p256dh},${auth}) ON CONFLICT(endpoint) DO UPDATE SET profile=EXCLUDED.profile,p256dh=EXCLUDED.p256dh,auth=EXCLUDED.auth`;
+      return json({ ok: true });
+    }
+    if (action === "fcm-subscribe") {
+      if (!mine) return json({ error: "Sign in first." }, 401);
+      const token = b.token;
+      if (typeof token !== "string" || token.length < 20 || token.length > 500 || !/^[A-Za-z0-9_:\-]+$/.test(token))
+        return json({ error: "That token did not look right." }, 400);
+      await rate(`fcm-subscribe:${mine.id}`, 30);
+      await ensureFcmTokens();
+      await sql`INSERT INTO fcm_tokens(token,profile) VALUES(${token},${mine.id}::uuid) ON CONFLICT(token) DO UPDATE SET profile=EXCLUDED.profile`;
+      return json({ ok: true });
+    }
+    if (action === "fcm-unsubscribe") {
+      if (!mine) return json({ error: "Sign in first." }, 401);
+      const token = b.token;
+      if (typeof token !== "string" || token.length > 500)
+        return json({ error: "That token did not look right." }, 400);
+      await ensureFcmTokens();
+      await sql`DELETE FROM fcm_tokens WHERE token=${token} AND profile=${mine.id}::uuid`;
       return json({ ok: true });
     }
     if (action === "push-unsubscribe") {
@@ -596,6 +617,8 @@ async function notify(
   } catch (e) {
     console.error("RoomRoster notification failed", kind);
   }
-  if (kind === "connection" || kind === "accepted")
+  if (kind === "connection" || kind === "accepted") {
     await pushNotify(to, event, kind, data as { name: string });
+    await fcmNotify(to, event, kind, data as { name: string });
+}
 }
